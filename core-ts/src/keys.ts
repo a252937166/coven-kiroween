@@ -1,6 +1,8 @@
 // Ephemeral and long-term P-256 ECDH keys, validation and fingerprints.
 // Spec 05: BG-03.1 (validated ephemeral key, fingerprint as a label).
 
+import { bytes, type Bytes } from "./bytes.ts";
+
 const subtle = globalThis.crypto.subtle;
 
 export const P256_RAW_PUBLIC_KEY_LENGTH = 65;
@@ -18,8 +20,14 @@ export async function generateEphemeralKeyPair(): Promise<CryptoKeyPair> {
   return (await subtle.generateKey(EC_PARAMS, false, ["deriveBits"])) as CryptoKeyPair;
 }
 
+/**
+ * Long-term keyholder key pair. Same algorithm; the private key is also
+ * non-extractable. The demo apps keep it in the browser's IndexedDB.
+ */
+export const generateLongTermKeyPair = generateEphemeralKeyPair;
+
 /** Uncompressed point encoding 0x04 || X || Y (65 bytes). */
-export async function exportRawPublicKey(publicKey: CryptoKey): Promise<Uint8Array> {
+export async function exportRawPublicKey(publicKey: CryptoKey): Promise<Bytes> {
   return new Uint8Array(await subtle.exportKey("raw", publicKey));
 }
 
@@ -36,18 +44,18 @@ export async function importRawPublicKey(raw: Uint8Array): Promise<CryptoKey> {
     throw new KeyValidationError("public key must be an uncompressed point");
   }
   try {
-    return await subtle.importKey("raw", raw, EC_PARAMS, true, []);
+    return await subtle.importKey("raw", bytes(raw), EC_PARAMS, true, []);
   } catch {
     throw new KeyValidationError("public key is not a valid P-256 point");
   }
 }
 
 /** SHA-256 of the raw public key encoding. A label for the key, not an identity proof. */
-export async function fingerprint(rawPublicKey: Uint8Array): Promise<Uint8Array> {
+export async function fingerprint(rawPublicKey: Uint8Array): Promise<Bytes> {
   if (rawPublicKey.length !== P256_RAW_PUBLIC_KEY_LENGTH) {
     throw new KeyValidationError("public key must be 65 bytes");
   }
-  return new Uint8Array(await subtle.digest("SHA-256", rawPublicKey));
+  return new Uint8Array(await subtle.digest("SHA-256", bytes(rawPublicKey)));
 }
 
 /** Short human label: first 16 bytes of the fingerprint as grouped hex. */

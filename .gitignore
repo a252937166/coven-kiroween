@@ -9,5 +9,10 @@ __pycache__/
 .hypothesis/
 *.local.txt
 .DS_Store
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+test-results/
+playwright-report/
 !.kiro/
 !.kiro/**

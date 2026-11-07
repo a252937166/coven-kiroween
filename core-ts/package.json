@@ -8,8 +8,22 @@
   "engines": {
     "node": ">=22.6"
   },
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "bin": {
+    "coven-recover": "./bin/recover.js"
+  },
   "scripts": {
     "test": "node --experimental-strip-types --no-warnings --test test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "shamir-secret-sharing": "0.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.1",
+    "fast-check": "4.10.2",
+    "typescript": "5.9.3"
   }
 }

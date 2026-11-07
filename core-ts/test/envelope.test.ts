@@ -115,3 +115,54 @@ test("T-10 malformed public keys are rejected", async () => {
   }
   await importRawPublicKey(good);
 });
+
+// --- fast-check versions (tasks 1.1 and 1.3) ---------------------------------
+
+import fc from "fast-check";
+import { toHex } from "../src/bytes.ts";
+
+test("T-12 known-answer AAD vector", () => {
+  const fp = new Uint8Array(32).fill(0xab);
+  const aad = encodeApprovalAad({ petitionId: "p", itemId: "i", sealVersionId: "v", requesterId: "r", approverId: "a" }, fp);
+  assert.equal(
+    toHex(aad),
+    toHex(new TextEncoder().encode("coven/v1/approval")) + "00" + "000170" + "000169" + "000176" + "000172" + "ab".repeat(32) + "000161",
+  );
+});
+
+const field = fc.string({ minLength: 0, maxLength: 24 });
+const bindingArb = fc.record({ petitionId: field, itemId: field, sealVersionId: field, requesterId: field, approverId: field });
+
+test("T-12 property: an envelope opens only under its exact six-field binding", async () => {
+  const r = await requester();
+  const other = await requester();
+  await fc.assert(
+    fc.asyncProperty(
+      bindingArb,
+      fc.constantFrom<keyof ApprovalBinding | "requesterKey">("petitionId", "itemId", "sealVersionId", "requesterId", "approverId", "requesterKey"),
+      field,
+      async (b, which, replacement) => {
+        const env = await sealApproval(share, r.raw, b);
+        assert.ok(bytesEqual(await openApproval(env, r.pair.privateKey, r.raw, b), share));
+        if (which === "requesterKey") {
+          await assert.rejects(openApproval(env, other.pair.privateKey, other.raw, b));
+        } else {
+          fc.pre(replacement !== b[which]);
+          await assert.rejects(openApproval(env, r.pair.privateKey, r.raw, { ...b, [which]: replacement }), /authentication failed/);
+        }
+      },
+    ),
+    { numRuns: 60 },
+  );
+});
+
+test("T-12 property: AAD encoding is injective over random bindings", () => {
+  const fp = new Uint8Array(32);
+  fc.assert(
+    fc.property(bindingArb, bindingArb, (a, b) => {
+      const same = (Object.keys(a) as (keyof ApprovalBinding)[]).every((k) => a[k] === b[k]);
+      assert.equal(bytesEqual(encodeApprovalAad(a, fp), encodeApprovalAad(b, fp)), same);
+    }),
+    { numRuns: 500 },
+  );
+});
