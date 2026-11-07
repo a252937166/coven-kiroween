@@ -13,6 +13,30 @@ Tasks 0, 9 and 10 are M0. Tasks 1 to 8 are M1 and M3.
 
 Newest first. Another run resumes from the first entry.
 
+- **2026-11-07, run 7 (Kiro in Kiro Crew): role isolation fixes after independent review.** No change to appearance or to the printed card.
+  - Shared: a role epoch (`ui-kit/src/components.tsx`) is bumped synchronously when a persona switch starts, before the new session cookie exists. Async work captures it, and the ui-kit flows take a guard that is checked right before each request and before any decryption (`StaleFlowError`). Late responses never reach the next persona's view, and no follow-up request is sent under the next session.
+  - Last Light: `ShareCard` and `RecoveryPanel` are keyed by persona, epoch, vault and recovery, so a typed code, an old card or a late `myCard()` or decrypt result is dropped on switch. The lantern's Released label now says the encrypted package was sent.
+  - Break Glass:
+    - Plaintext is bound to the viewer, the ticket and the epoch, and is gated at render (requester only). The ticket is keyed by persona and epoch.
+    - Stale queue and ticket responses are discarded, and the desk shows "Loading the desk for …" until data for the current persona arrives.
+    - "Hide" is restored and clears the plaintext. Leaving a ticket also clears it.
+    - A new petition opened from a link view clears the fragment and shows the new ticket.
+    - Released copy now says the encrypted package was sent. "Decrypted and verified in this browser" appears only after `openRelease` succeeds.
+  - Browser regression checks (`e2e/demos.spec.ts`). The delays hold only the response, after the request has gone out as the original persona:
+    - Robin's release response is held 1.5 s while switching to Sage: no plaintext for Sage. Robin then retrieves normally.
+    - Leaving and reselecting the ticket, and Hide plus reselect, reveal nothing.
+    - A new petition from a link view clears the fragment.
+    - Bram's `my-share` response is held while switching to Cleo: no card, and no `card-issued` request.
+    - A word code pasted but not submitted is empty after switching away and back.
+    - Existing assertions are kept.
+  - Mutation evidence:
+    - Removing the Break Glass release guards (ticket key, bound release, render gate, retrieve guard) fails the new test at "no `.secret` for Sage".
+    - Removing the Last Light keys plus the epoch check fails at "no `.share-card` for Cleo".
+    - Both were restored.
+  - Runs: root typecheck 0 errors; build OK; `npm test` (core 40, service 32, ui-kit 3, scanner self-test, AG-02 fixtures 9); Playwright 4 of 4, twice. Print parity versus the 7665e0d baseline: 0 differences inside `.share-card`, only the wrapper's inherited color as before; PDF page 1 has 347 characters, page 2 is blank. Theme and Last Light CSS are untouched. Screenshots in `docs/screenshots/` refreshed (0 px overflow, content masked).
+  - Limitation: a release response discarded by the guard has still been served, so the petition shows Released. The key stays in the browser, and the requester can retrieve again inside the window.
+  - AG-01 physical read-back remains **pending**. The private run is untouched.
+
 - **2026-11-07, run 6 (Kiro in Kiro Crew): UI redesign of both apps.** Workflows, copy about guarantees, role guards, CSP and print boundaries are unchanged. Last Light is now a family-archive folio with an inline lantern that follows the real lifecycle state. Break Glass is now an incident desk with a request queue beside a petition ticket. Mail, receipts and fingerprints moved to secondary disclosures. Receipt outcomes have distinct text and tone. No external requests at runtime.
   - Print boundary: the CSS rules that reach the share card and the `@media print` block are byte-identical to 7665e0d, and the card JSX is unchanged. `scripts/print-geometry.ts` compares layout and computed styles of the 16 print-subtree nodes in print media, before and after: 0 differences inside `.share-card`. The only differences are the color and border-color inherited by the borderless, text-free `.print-area` wrapper (now the new ink color). The A4 PDF from the revised build has 347 text characters on page 1 and none on page 2, the same as the run-20261107 PDF. No other page content appears in it. Physical AG-01 does not need repeating for these changes. Its evidence still names the 7665e0d build.
   - Checks: root typecheck 0 errors; build OK; `npm test` (core 40, service 32, ui-kit 3, scanner self-test, AG-02 fixtures 9); Playwright 3 of 3. Selectors moved to `data-testid` state chips and exact button names (`/^Approve:/`), with no assertion removed.

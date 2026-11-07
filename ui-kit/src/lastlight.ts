@@ -10,7 +10,7 @@ import { openRecovery, type LocalRecovery, type OpenedRecovery, type RecoveryPac
 import { decodeShareFor, encodeQrPayload, encodeWordCode, shareTag } from "@coven/core-ts/shares";
 import { sealVaultItem, sealVaultKey } from "@coven/core-ts/vault";
 import type { Api } from "./api.ts";
-import { checkedFingerprint, directory, ensureEnrolled, FlowError, requireKey } from "./common.ts";
+import { checkedFingerprint, directory, ensureEnrolled, ensureLive, FlowError, requireKey, type Guard } from "./common.ts";
 import type { KeyStore } from "./keystore.ts";
 
 export const OWNER = "user:mara";
@@ -169,8 +169,12 @@ export async function cardFor(vaultId: string, share: Uint8Array): Promise<CardC
 }
 
 /** Trustee: decrypt my own share in this browser and encode it for a card. */
-export async function myCard(api: Api, ks: KeyStore, me: string, vaultId: string): Promise<CardContent> {
+export async function myCard(api: Api, ks: KeyStore, me: string, vaultId: string, guard?: Guard): Promise<CardContent> {
   const share = await myShare(api, ks, me, vaultId);
+  if (guard && !guard()) {
+    share.fill(0);
+    ensureLive(guard);
+  }
   try {
     return await cardFor(vaultId, share);
   } finally {
@@ -189,9 +193,10 @@ export function recordCardIssued(api: Api, vaultId: string) {
   return api.post<{ receipt: Receipt }>(`/api/ll/vaults/${vaultId}/card-issued`);
 }
 
-export async function beginRecovery(api: Api, ks: KeyStore, me: string, vaultId: string) {
+export async function beginRecovery(api: Api, ks: KeyStore, me: string, vaultId: string, guard?: Guard) {
   const pair = await generateEphemeralKeyPair();
   const publicKey = await exportRawPublicKey(pair.publicKey);
+  ensureLive(guard);
   const status = await api.post<VaultStatus>(`/api/ll/vaults/${vaultId}/recoveries`, { public_key: toBase64(publicKey) });
   const r = status.recovery;
   if (!r || r.recoverer_id !== me) throw new FlowError("service did not bind this recovery to you");
@@ -205,7 +210,7 @@ export async function beginRecovery(api: Api, ks: KeyStore, me: string, vaultId:
  * my digital copy, or from the word code / QR text I read off my printed card.
  * Either way it is sealed here; only the envelope reaches the service.
  */
-export async function submitShare(api: Api, ks: KeyStore, me: string, status: VaultStatus, printedText?: string) {
+export async function submitShare(api: Api, ks: KeyStore, me: string, status: VaultStatus, printedText?: string, guard?: Guard) {
   const r = status.recovery;
   // "Complete" means the package was served; trustees may still add a share.
   if (!r || (r.state !== "Open" && r.state !== "Complete")) throw new FlowError("no open recovery");
@@ -218,6 +223,7 @@ export async function submitShare(api: Api, ks: KeyStore, me: string, status: Va
       recovererId: r.recoverer_id,
       trusteeId: me,
     });
+    ensureLive(guard);
     return api.post<{ counted: boolean; vault: VaultStatus }>(`/api/ll/recoveries/${r.recovery_id}/shares`, { envelope: toBase64(envelope) });
   } finally {
     share.fill(0);
@@ -236,10 +242,12 @@ export async function hasRecoveryKey(ks: KeyStore, rid: string) {
  * trustee can add a share to the same recovery and this can be called again.
  * The recovery key stays in this browser for that retry.
  */
-export async function completeRecovery(api: Api, ks: KeyStore, rid: string): Promise<OpenedRecovery & { receipt: Receipt }> {
+export async function completeRecovery(api: Api, ks: KeyStore, rid: string, guard?: Guard): Promise<OpenedRecovery & { receipt: Receipt }> {
   const local = await ks.get<LocalRecovery>(`recovery:${rid}`);
   if (!local) throw new FlowError("this browser does not hold the key for this recovery");
+  ensureLive(guard);
   const pkg = await api.get<RecoveryPackage & { receipt: Receipt }>(`/api/ll/recoveries/${rid}/package`);
+  ensureLive(guard);
   const opened = await openRecovery(local, pkg);
   return { ...opened, receipt: pkg.receipt };
 }

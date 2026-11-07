@@ -1,7 +1,7 @@
 // Last Light: a family archive handed over when the owner stops checking in
 // and enough trustees act together.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { Api } from "@coven/ui-kit/api.ts";
 import { IndexedDbKeyStore } from "@coven/ui-kit/keystore.ts";
@@ -23,9 +23,11 @@ import {
 } from "@coven/ui-kit/lastlight.ts";
 import {
   clock,
+  currentEpoch,
   CovenMark,
   DemoClock,
   ErrorLine,
+  isCurrentEpoch,
   MailViewer,
   personaName,
   RecordVerifier,
@@ -80,16 +82,34 @@ function LatestLine({ entry }: { entry: RecordEntry | null }) {
   );
 }
 
+/** True while the component is mounted and the persona has not changed since `epoch`. */
+function useLive(epoch: number) {
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  return useCallback(() => mounted.current && isCurrentEpoch(epoch), [epoch]);
+}
+
 export function App() {
-  const { personas, me, switchTo } = usePersonas(api, "last-light", OWNER);
+  const { personas, me, switchTo, epoch } = usePersonas(api, "last-light", OWNER);
   const [vaults, setVaults] = useState<VaultStatus[] | null>(null);
   const [tick, setTick] = useState(0);
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
   useEffect(() => {
     if (!me) return;
-    listVaults(api).then(setVaults, () => setVaults([]));
-  }, [me, tick]);
+    let stale = false;
+    const e = currentEpoch();
+    listVaults(api).then(
+      (vs) => { if (!stale && isCurrentEpoch(e)) setVaults(vs); },
+      () => { if (!stale) setVaults([]); },
+    );
+    return () => { stale = true; };
+  }, [me, epoch, tick]);
 
   const v = vaults?.[0];
   const latest = useLatestRecord(api, v ? `ll:${v.vault_id}` : null, `${tick}-${me}-${v?.receipt.length}`);
@@ -115,7 +135,7 @@ export function App() {
             <p>No vault yet. Switch to Mara Hollow (vault owner) to set up the demo.</p>
           </section>
         )}
-        {v && me && <VaultView v={v} me={me} personas={personas} latest={latest} onChanged={refresh} />}
+        {v && me && <VaultView v={v} me={me} epoch={epoch} personas={personas} latest={latest} onChanged={refresh} />}
       </main>
 
       {v && me && (
@@ -198,8 +218,12 @@ function StageLedger({ v }: { v: VaultStatus }) {
   );
 }
 
-function VaultView(props: { v: VaultStatus; me: string; personas: Persona[]; latest: RecordEntry | null; onChanged: () => void }) {
-  const { v, me, personas, latest, onChanged } = props;
+function VaultView(props: { v: VaultStatus; me: string; epoch: number; personas: Persona[]; latest: RecordEntry | null; onChanged: () => void }) {
+  const { v, me, epoch, personas, latest, onChanged } = props;
+  // Role-scoped panels are remounted (all local state dropped) when the persona,
+  // the vault or the recovery changes, and as soon as a persona switch starts.
+  const cardKey = `${me}:${epoch}:${v.vault_id}`;
+  const recoveryKey = `${cardKey}:${v.recovery?.recovery_id ?? "none"}`;
   const { busy, error, run } = useAction();
   const isOwner = me === v.owner_id;
   const isTrustee = v.trustee_ids.includes(me);
@@ -237,8 +261,8 @@ function VaultView(props: { v: VaultStatus; me: string; personas: Persona[]; lat
             </div>
           )}
 
-          {isTrustee && !recoveryLive && <ShareCard v={v} me={me} personas={personas} onChanged={onChanged} lead />}
-          {isTrustee && recoveryLive && <RecoveryPanel v={v} me={me} personas={personas} onChanged={onChanged} />}
+          {isTrustee && !recoveryLive && <ShareCard key={cardKey} v={v} me={me} epoch={epoch} personas={personas} onChanged={onChanged} lead />}
+          {isTrustee && recoveryLive && <RecoveryPanel key={recoveryKey} v={v} me={me} epoch={epoch} personas={personas} onChanged={onChanged} />}
         </div>
 
         <div className="ll-lamp">
@@ -270,7 +294,7 @@ function VaultView(props: { v: VaultStatus; me: string; personas: Persona[]; lat
 
       {isTrustee && recoveryLive && (
         <section className="ll-letters" aria-label="Share card">
-          <ShareCard v={v} me={me} personas={personas} onChanged={onChanged} />
+          <ShareCard key={cardKey} v={v} me={me} epoch={epoch} personas={personas} onChanged={onChanged} />
         </section>
       )}
 
@@ -341,11 +365,13 @@ function AddItem({ vaultId, onChanged }: { vaultId: string; onChanged: () => voi
   );
 }
 
-function ShareCard({ v, me, personas, onChanged, lead = false }: { v: VaultStatus; me: string; personas: Persona[]; onChanged: () => void; lead?: boolean }) {
+function ShareCard(props: { v: VaultStatus; me: string; epoch: number; personas: Persona[]; onChanged: () => void; lead?: boolean }) {
+  const { v, me, epoch, personas, onChanged, lead = false } = props;
   const [card, setCard] = useState<(CardContent & { svg: string; receipt: Receipt }) | null>(null);
   const { busy, error, run } = useAction();
+  const live = useLive(epoch);
   useEffect(() => setCard(null), [me]);
-  const Heading = lead ? "h2" : "h2";
+  const Heading = "h2";
   return (
     <div className="ll-action" aria-labelledby="card-h">
       <Heading id="card-h" className="ll-subtitle">My share card</Heading>
@@ -359,9 +385,15 @@ function ShareCard({ v, me, personas, onChanged, lead = false }: { v: VaultStatu
           disabled={busy}
           onClick={() =>
             run(async () => {
-              const c = await myCard(api, ks, me, v.vault_id);
+              // After every await: stop if the persona changed or this panel left,
+              // so a late response is neither shown nor followed by a request
+              // under the next persona's session.
+              const c = await myCard(api, ks, me, v.vault_id, live);
+              if (!live()) return;
               const svg = await QRCode.toString(c.qr, { type: "svg", errorCorrectionLevel: "M", margin: 1 });
+              if (!live()) return;
               const { receipt } = await recordCardIssued(api, v.vault_id);
+              if (!live()) return;
               setCard({ ...c, svg, receipt });
               onChanged();
             })
@@ -395,7 +427,9 @@ function ShareCard({ v, me, personas, onChanged, lead = false }: { v: VaultStatu
   );
 }
 
-function RecoveryPanel({ v, me, personas, onChanged }: { v: VaultStatus; me: string; personas: Persona[]; onChanged: () => void }) {
+function RecoveryPanel(props: { v: VaultStatus; me: string; epoch: number; personas: Persona[]; onChanged: () => void }) {
+  const { v, me, epoch, personas, onChanged } = props;
+  const live = useLive(epoch);
   const r = v.recovery;
   const [typed, setTyped] = useState("");
   const [opened, setOpened] = useState<OpenedRecovery | null>(null);
@@ -405,7 +439,7 @@ function RecoveryPanel({ v, me, personas, onChanged }: { v: VaultStatus; me: str
   useEffect(() => {
     setOpened(null);
     setIncomplete(null);
-    if (r) hasRecoveryKey(ks, r.recovery_id).then(setHaveKey);
+    if (r) hasRecoveryKey(ks, r.recovery_id).then((k) => { if (live()) setHaveKey(k); });
   }, [r?.recovery_id, me]);
 
   const submitted = r?.submitted_by.includes(me);
@@ -416,7 +450,7 @@ function RecoveryPanel({ v, me, personas, onChanged }: { v: VaultStatus; me: str
       {!r && v.state === "Handover" && (
         <>
           <p className="small">Open a recovery to receive the other trustees' shares in this browser. They are encrypted to a one-time key made here.</p>
-          <button className="primary" disabled={busy} onClick={() => run(async () => { await beginRecovery(api, ks, me, v.vault_id); onChanged(); })}>
+          <button className="primary" disabled={busy} onClick={() => run(async () => { await beginRecovery(api, ks, me, v.vault_id, live); if (live()) onChanged(); })}>
             Open a recovery as {personaName(personas, me)}
           </button>
         </>
@@ -435,14 +469,14 @@ function RecoveryPanel({ v, me, personas, onChanged }: { v: VaultStatus; me: str
               {r.state === "Complete" && (
                 <p className="small muted">The package was already sent. Add your share if the recovering trustee could not use one of the others.</p>
               )}
-              <button className="primary" disabled={busy} onClick={() => run(async () => { await submitShare(api, ks, me, v); onChanged(); })}>
+              <button className="primary" disabled={busy} onClick={() => run(async () => { await submitShare(api, ks, me, v, undefined, live); if (live()) onChanged(); })}>
                 Use my stored share
               </button>
               <div className="field ll-typed">
                 <label htmlFor="typed">Or type the word code (or paste the QR text) from my printed card</label>
                 <input id="typed" className="mono" autoComplete="off" spellCheck={false} value={typed} onChange={(e) => setTyped(e.target.value)} />
               </div>
-              <button disabled={busy || !typed.trim()} onClick={() => run(async () => { await submitShare(api, ks, me, v, typed); setTyped(""); onChanged(); })}>
+              <button disabled={busy || !typed.trim()} onClick={() => run(async () => { await submitShare(api, ks, me, v, typed, live); if (!live()) return; setTyped(""); onChanged(); })}>
                 Submit share from card
               </button>
               <p className="small muted">The code is checked and encrypted in this browser. Only the encrypted envelope is sent.</p>
@@ -459,8 +493,10 @@ function RecoveryPanel({ v, me, personas, onChanged }: { v: VaultStatus; me: str
                     run(async () => {
                       setIncomplete(null);
                       try {
-                        setOpened(await completeRecovery(api, ks, r.recovery_id));
+                        const res = await completeRecovery(api, ks, r.recovery_id, live);
+                        if (live()) setOpened(res);
                       } catch (e) {
+                        if (!live()) return;
                         if (e instanceof RecoveryIncompleteError) setIncomplete(e);
                         else throw e;
                       } finally {

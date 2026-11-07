@@ -26,6 +26,21 @@ export class FlowError extends Error {
   }
 }
 
+/** Returns false once the persona that started a flow is no longer active. */
+export type Guard = () => boolean;
+
+export class StaleFlowError extends FlowError {
+  constructor() {
+    super("the signed-in persona changed; this action was cancelled before it was sent");
+    this.name = "StaleFlowError";
+  }
+}
+
+/** Call right before a request that must be sent as the persona who started the flow. */
+export function ensureLive(guard: Guard | undefined) {
+  if (guard && !guard()) throw new StaleFlowError();
+}
+
 /** Make sure this browser holds a key for `user` and the service has bound its public half. */
 export async function ensureEnrolled(api: Api, ks: KeyStore, user: string): Promise<LongTermKey> {
   const existing = await longTermKey(ks, user);

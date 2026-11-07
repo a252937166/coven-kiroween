@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const LL = "http://127.0.0.1:5183";
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const BG = "http://127.0.0.1:5184";
 const dir = process.env.COVEN_E2E_DIR!;
 const root = join(import.meta.dirname, "..");
@@ -101,6 +102,11 @@ test("Break Glass: quorum, duplicate approval, single-item release, rotation", a
   await page.screenshot({ path: join(dir, "break-glass-released.png"), fullPage: true });
   await page.getByRole("button", { name: "I rotated it in the issuing system" }).click();
   await expect(page.getByTestId("rotation-aws-root")).toHaveText("rotated");
+  // Hide clears the plaintext; reselecting the ticket does not reveal it again.
+  await page.getByRole("button", { name: "Hide" }).click();
+  await expect(page.locator(".secret")).toHaveCount(0);
+  await page.getByRole("button", { name: /Production database locked out/ }).click();
+  await expect(page.locator(".secret")).toHaveCount(0);
 
   // The plaintext never travelled to the service.
   for (const r of requests) expect(r).not.toContain("Pumpkin-Lantern-4417");
@@ -168,6 +174,56 @@ test("Break Glass scenario 3: a reused petition link works in the window and is 
   await signInAs(page, "Kit");
   expect((await fetchRelease(page, b.pid)).status).toBe(404);
 });
+
+test("Break Glass role isolation: a late release across a persona switch, leaving the ticket, a new petition from a link", async () => {
+  const c = await openAndApprove(page, "AWS root account (fictional)", "Isolation check (fictional) C");
+  await signInAs(page, "Robin");
+  await page.getByRole("button", { name: /Isolation check/ }).click();
+  const ticket = page.getByRole("region", { name: "Selected petition" });
+
+  // The release response is held for 1.5 s; Robin switches to Sage (an eligible approver) meanwhile.
+  let held = 0;
+  // Send now (as Robin), hold only the RESPONSE: a late answer to Robin's request.
+  await page.route("**/api/bg/petitions/*/release", async (route) => {
+    held++;
+    const response = await route.fetch();
+    await sleep(1500);
+    await route.fulfill({ response });
+  });
+  const sent = page.waitForRequest((r) => r.url().endsWith("/release"));
+  await ticket.getByRole("button", { name: "Retrieve and decrypt in this browser" }).click();
+  await sent; // Robin's request is on the wire; its answer is held
+  await signInAs(page, "Sage");
+  await sleep(2500);
+  expect(held).toBe(1); // the response really arrived after the switch
+  await expect(page.locator(".secret")).toHaveCount(0);
+  await expect(page.getByText(/Decrypted and verified in this browser/)).toHaveCount(0);
+  await expect(page.getByText(/Isolation check/).first()).toBeVisible(); // Sage's own view of the ticket
+  await page.unroute("**/api/bg/petitions/*/release");
+
+  // The late result was discarded before decryption, so Robin's key is still here.
+  await signInAs(page, "Robin");
+  await page.getByRole("button", { name: /Isolation check/ }).click();
+  await ticket.getByRole("button", { name: "Retrieve and decrypt in this browser" }).click();
+  await expect(page.locator(".secret")).toHaveText(/Pumpkin-Lantern-4417/);
+  await expect(page.getByText(/Decrypted and verified in this browser/)).toBeVisible();
+
+  // Leaving the ticket drops the plaintext; coming back does not reveal it.
+  await page.getByRole("button", { name: /Production database locked out/ }).click();
+  await expect(page.locator(".secret")).toHaveCount(0);
+  await page.getByRole("button", { name: /Isolation check/ }).click();
+  await expect(page.locator(".secret")).toHaveCount(0);
+
+  // A new petition opened while an old link is shown replaces the link selection.
+  await page.goto(c.link);
+  await expect(page.getByRole("region", { name: "Petition link" })).toBeVisible();
+  await page.getByRole("button", { name: "New petition" }).click();
+  await page.getByLabel("Reason").fill("Fresh petition from a link view (fictional) D");
+  await page.getByRole("button", { name: "Open petition" }).click();
+  await expect(page.getByRole("region", { name: "Selected petition" })).toContainText("Fresh petition from a link view");
+  await expect(page.getByRole("region", { name: "Petition link" })).toHaveCount(0);
+  expect(new URL(page.url()).hash).toBe("");
+});
 });
 
 test("Last Light: cards, check-in cancels, recovery with a typed code, offline CLI", async ({ page }) => {
@@ -194,6 +250,33 @@ test("Last Light: cards, check-in cancels, recovery with a typed code, offline C
     await page.getByRole("button", { name: "Hide card" }).click();
   }
 
+  // A late share-card response must not survive a persona switch, nor trigger
+  // a "card issued" request under the next persona's session.
+  const cardIssued: string[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "POST" && r.url().includes("/card-issued")) cardIssued.push(r.url());
+  });
+  await signInAs(page, "Bram");
+  let heldShares = 0;
+  // Send now (as Bram), hold only the RESPONSE: a late answer to Bram's request.
+  await page.route("**/api/ll/vaults/*/my-share", async (route) => {
+    heldShares++;
+    const response = await route.fetch();
+    await sleep(1500);
+    await route.fulfill({ response });
+  });
+  const issuedBefore = cardIssued.length;
+  const shareSent = page.waitForRequest((r) => r.url().endsWith("/my-share"));
+  await page.getByRole("button", { name: "Show my card" }).click();
+  await shareSent; // Bram's request is on the wire; its answer is held
+  await signInAs(page, "Cleo");
+  await sleep(2500);
+  expect(heldShares).toBe(1);
+  await expect(page.locator(".share-card")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Show my card" })).toBeVisible();
+  expect(cardIssued.length).toBe(issuedBefore);
+  await page.unroute("**/api/ll/vaults/*/my-share");
+
   await signInAs(page, "Mara Hollow");
   await page.getByRole("button", { name: "+30 days" }).click();
   await page.getByRole("button", { name: "+7 days" }).click();
@@ -208,6 +291,14 @@ test("Last Light: cards, check-in cancels, recovery with a typed code, offline C
   await page.getByRole("button", { name: /Open a recovery/ }).click();
   await page.getByRole("button", { name: "Use my stored share" }).click();
   await expect(page.getByText(/shares 1 of 3/)).toBeVisible();
+
+  // A code pasted but not submitted does not follow a persona switch.
+  await signInAs(page, "Dov");
+  await page.getByLabel(/type the word code/).fill(words.Dov);
+  await signInAs(page, "Cleo");
+  await expect(page.getByLabel(/type the word code/)).toHaveValue("");
+  await signInAs(page, "Dov");
+  await expect(page.getByLabel(/type the word code/)).toHaveValue("");
 
   await signInAs(page, "Bram");
   await page.getByLabel(/type the word code/).fill(words.Bram.toLowerCase());

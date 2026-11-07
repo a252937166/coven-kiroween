@@ -31,6 +31,8 @@ Only what was actually used is listed. Each entry points to a committed artifact
 
 - Kiro redesigned both apps from design notes the owner supplied via Codex: an artifact-led hero, one permitted next action per role, and outcomes first with evidence on demand. Evidence: `scripts/print-geometry.ts` (printed card unchanged), `scripts/screenshots.ts` and `docs/screenshots/`, and the run 6 entry of the `tasks.md` progress log.
 
+- Run 7: Kiro fixed role-isolation edge cases found on independent review: a role epoch, keyed role-scoped panels, and plaintext bound to the requester. Each fix has a held-response browser check, plus a mutation run showing the check fails without the fix (`tasks.md`, run 7).
+
 ## Steering
 
 - `.kiro/steering/guarantees.md` (owner-written, `inclusion: always`) shaped the design and the app copy: retrieval-window wording, "a missed check-in is a signal, not proof of death", routing labels, online-only earliest dates, and the offline-recovery statement on the Last Light screen and in `README.md`.

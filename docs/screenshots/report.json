@@ -65,7 +65,7 @@
   },
   {
     "file": "docs/screenshots/break-glass-focus-390.png",
-    "focused": "<button class=\"danger\">Deny</button>"
+    "focused": "<button>Refresh</button>"
   },
   {
     "file": "docs/screenshots/break-glass-released-1440.png",

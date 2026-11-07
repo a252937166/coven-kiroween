@@ -145,7 +145,13 @@ export function MailViewer({ api, refreshKey }: { api: Api; refreshKey: unknown 
   const [items, setItems] = useState<Mail[]>([]);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
-    mail(api).then(setItems, (e) => setErr(errorText(e)));
+    let stale = false;
+    const e = roleEpoch.n;
+    mail(api).then(
+      (m) => { if (!stale && isCurrentEpoch(e)) setItems(m); },
+      (err) => { if (!stale) setErr(errorText(err)); },
+    );
+    return () => { stale = true; };
   }, [api, refreshKey]);
   return (
     <section aria-labelledby="mail-h">
@@ -231,17 +237,40 @@ export function useLatestRecord(api: Api, chain: string | null, refreshKey: unkn
   const [entry, setEntry] = useState<RecordEntry | null>(null);
   useEffect(() => {
     if (!chain) return;
+    let stale = false;
+    const e = roleEpoch.n;
     api
       .get<{ entries: RecordEntry[] }>(`/api/records/${encodeURIComponent(chain)}`)
-      .then((r) => setEntry(r.entries[r.entries.length - 1] ?? null), () => setEntry(null));
+      .then(
+        (r) => { if (!stale && isCurrentEpoch(e)) setEntry(r.entries[r.entries.length - 1] ?? null); },
+        () => { if (!stale) setEntry(null); },
+      );
+    return () => { stale = true; };
   }, [api, chain, refreshKey]);
   return entry;
+}
+
+/**
+ * Role epoch: bumped synchronously when a persona switch STARTS, before the
+ * new session cookie exists. Async work captures the epoch when it begins and
+ * must drop its result (and send no further requests) if the epoch moved, so
+ * one persona's response can never land in another persona's view.
+ */
+const roleEpoch = { n: 0 };
+
+export function currentEpoch(): number {
+  return roleEpoch.n;
+}
+
+export function isCurrentEpoch(e: number): boolean {
+  return e === roleEpoch.n;
 }
 
 /** Load personas for this app and keep a signed-in session. */
 export function usePersonas(api: Api, app: string, fallback: string) {
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [me, setMe] = useState<string | null>(null);
+  const [epoch, setEpoch] = useState(roleEpoch.n);
   useEffect(() => {
     (async () => {
       const all = await api.get<Persona[]>("/api/personas");
@@ -257,12 +286,15 @@ export function usePersonas(api: Api, app: string, fallback: string) {
   }, [api, app, fallback]);
   const switchTo = useCallback(
     async (id: string) => {
+      roleEpoch.n += 1;
+      const e = roleEpoch.n;
+      setEpoch(e); // remount role-scoped views now, before the network round trip
       await api.signIn(id);
-      setMe(id);
+      if (isCurrentEpoch(e)) setMe(id);
     },
     [api],
   );
-  return { personas, me, switchTo };
+  return { personas, me, switchTo, epoch };
 }
 
 export function personaName(personas: Persona[], id: string) {

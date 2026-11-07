@@ -7,7 +7,7 @@ import { exportRawPublicKey, generateEphemeralKeyPair } from "@coven/core-ts/key
 import { openRelease, type LocalPetition, type ReleasePackage } from "@coven/core-ts/release";
 import { sealCredential } from "@coven/core-ts/vault";
 import { ApiError, type Api } from "./api.ts";
-import { checkedFingerprint, directory, ensureEnrolled, FlowError, requireKey } from "./common.ts";
+import { checkedFingerprint, directory, ensureEnrolled, ensureLive, FlowError, requireKey, type Guard } from "./common.ts";
 import type { KeyStore } from "./keystore.ts";
 
 export interface BgItem {
@@ -105,9 +105,10 @@ export function petition(api: Api, pid: string) {
 }
 
 /** Requester: generate a non-extractable ephemeral key for this petition and keep it locally. */
-export async function openPetition(api: Api, ks: KeyStore, me: string, itemId: string, reason: string, windowSeconds: number) {
+export async function openPetition(api: Api, ks: KeyStore, me: string, itemId: string, reason: string, windowSeconds: number, guard?: Guard) {
   const pair = await generateEphemeralKeyPair();
   const publicKey = await exportRawPublicKey(pair.publicKey);
+  ensureLive(guard);
   const status = await api.post<PetitionStatus>("/api/bg/petitions", {
     item_id: itemId,
     reason,
@@ -128,7 +129,7 @@ export async function openPetition(api: Api, ks: KeyStore, me: string, itemId: s
 }
 
 /** Approver: open my own share blob, re-encrypt it to the requester key with the six-field binding. */
-export async function approvePetition(api: Api, ks: KeyStore, me: string, pid: string) {
+export async function approvePetition(api: Api, ks: KeyStore, me: string, pid: string, guard?: Guard) {
   const res = await api.get<{ status: PetitionStatus; approver_share: string }>(`/api/bg/petitions/${pid}/approver-share`);
   const s = res.status;
   const { raw: requesterKey } = await checkedFingerprint(s.requester_public_key, s.fingerprint);
@@ -146,6 +147,7 @@ export async function approvePetition(api: Api, ks: KeyStore, me: string, pid: s
       requesterId: s.requester_id,
       approverId: me,
     });
+    ensureLive(guard);
     return api.post<{ counted: boolean; status: PetitionStatus }>(`/api/bg/petitions/${pid}/approvals`, { envelope: toBase64(envelope) });
   } finally {
     share.fill(0);
@@ -161,9 +163,10 @@ export async function hasLocalKey(ks: KeyStore, pid: string) {
 }
 
 /** Requester: fetch the package, verify every envelope against MY local record, rebuild, decrypt. */
-export async function retrieve(api: Api, ks: KeyStore, pid: string): Promise<{ secret: string; notice: string; expiresAt: string }> {
+export async function retrieve(api: Api, ks: KeyStore, pid: string, guard?: Guard): Promise<{ secret: string; notice: string; expiresAt: string }> {
   const local = await ks.get<LocalPetition>(`petition:${pid}`);
   if (!local) throw new FlowError("this browser no longer holds the petition key (already opened, or a different browser)");
+  ensureLive(guard);
   let pkg: ReleasePackage & { retrieval_notice: string; expires_at: string };
   try {
     pkg = await api.get(`/api/bg/petitions/${pid}/release`);
@@ -173,6 +176,9 @@ export async function retrieve(api: Api, ks: KeyStore, pid: string): Promise<{ s
     if (e instanceof ApiError && e.status === 410) await ks.delete(`petition:${pid}`);
     throw e;
   }
+  // Do not decrypt for a persona that is no longer active. The key stays, so the
+  // requester can retrieve again inside the window.
+  ensureLive(guard);
   const secret = await openRelease(local, pkg);
   await ks.delete(`petition:${pid}`);
   return { secret, notice: pkg.retrieval_notice, expiresAt: pkg.expires_at };

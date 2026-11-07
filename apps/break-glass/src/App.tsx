@@ -1,7 +1,7 @@
 // Break Glass: an incident dispatch desk. One sealed credential, released to
 // one requester, after a quorum of approvers agrees on that same petition.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Api, ApiError } from "@coven/ui-kit/api.ts";
 import { IndexedDbKeyStore } from "@coven/ui-kit/keystore.ts";
 import {
@@ -26,9 +26,11 @@ import {
 } from "@coven/ui-kit/breakglass.ts";
 import {
   clock,
+  currentEpoch,
   CovenMark,
   DemoClock,
   ErrorLine,
+  isCurrentEpoch,
   MailViewer,
   personaName,
   personaRole,
@@ -40,19 +42,37 @@ import {
   utc,
   type Tone,
 } from "@coven/ui-kit/components.tsx";
-import type { Persona } from "@coven/ui-kit/common.ts";
+import { StaleFlowError, type Persona } from "@coven/ui-kit/common.ts";
 import type { Receipt, RecordEntry } from "@coven/core-ts/records";
 
 const api = new Api({ app: "break-glass" });
 const ks = new IndexedDbKeyStore("coven-break-glass");
 
 type State = PetitionStatus["state"];
-type Released = { petitionId: string; itemId: string; secret: string; notice: string };
+/** Plaintext bound to the persona who decrypted it, the ticket and the role epoch. */
+type Released = { petitionId: string; itemId: string; secret: string; notice: string; viewer: string; epoch: number };
+
+/** True while mounted and the persona has not changed since `epoch`. */
+function useLive(epoch: number) {
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  return useCallback(() => mounted.current && isCurrentEpoch(epoch), [epoch]);
+}
 
 const STATE: Record<State, { label: string; tone: Tone; solid?: boolean; line: string }> = {
   Open: { label: "Awaiting quorum", tone: "info", line: "Blocked until enough distinct approvers agree. Nothing is released before quorum." },
   Approved: { label: "Approved", tone: "ok", line: "Quorum reached. Only the requester can retrieve, in their own browser, before the link ends." },
-  Released: { label: "Released", tone: "ok", solid: true, line: "The requester retrieved the credential. Rotate it where it was issued." },
+  Released: {
+    label: "Released",
+    tone: "ok",
+    solid: true,
+    line: "The service sent the encrypted package to the requester. It opens only in the requester's browser. Rotate the credential where it was issued.",
+  },
   Expired: { label: "Expired", tone: "danger", line: "The retrieval window ended. The service will not serve this petition again." },
   Denied: { label: "Denied", tone: "danger", solid: true, line: "An approver or the item admin denied this petition. It is closed." },
   Invalidated: { label: "Invalidated", tone: "quiet", line: "The item was resealed. Petitions for the old version are closed." },
@@ -97,7 +117,7 @@ function remaining(expires: string, now: string) {
 }
 
 export function App() {
-  const { personas, me, switchTo } = usePersonas(api, "break-glass", "user:robin");
+  const { personas, me, switchTo, epoch } = usePersonas(api, "break-glass", "user:robin");
   const [items, setItems] = useState<BgItem[]>([]);
   const [petitions, setPetitions] = useState<PetitionStatus[]>([]);
   const [localKeys, setLocalKeys] = useState<Record<string, boolean>>({});
@@ -109,6 +129,7 @@ export function App() {
   const [linkId, setLinkId] = useState<string | null>(() => petitionIdFromHash(window.location.hash));
   const [selected, setSelected] = useState<string | null>(null);
   const [composing, setComposing] = useState(false);
+  const [dataFor, setDataFor] = useState<string | null>(null); // `${persona}:${epoch}` the queue was loaded for
 
   const refresh = useCallback(() => setTick((t) => t + 1), []);
   const latest = useLatestRecord(api, me ? "bg" : null, `${tick}-${me}`);
@@ -121,6 +142,9 @@ export function App() {
 
   useEffect(() => {
     if (!me) return;
+    let stale = false;
+    const e = currentEpoch();
+    const live = () => !stale && isCurrentEpoch(e);
     (async () => {
       const [its, ps, rec, clk] = await Promise.all([
         listItems(api),
@@ -128,6 +152,7 @@ export function App() {
         api.get<{ receipt: Receipt }>("/api/records/bg"),
         api.get<{ server_now: string }>("/api/demo/clock"),
       ]);
+      if (!live()) return; // a response for an earlier persona or refresh
       setItems(its);
       setPetitions(ps);
       setReceipt(rec.receipt);
@@ -141,10 +166,13 @@ export function App() {
           lk[p.petition_id] = await hasLocalKey(ks, p.petition_id);
         }
       }
+      if (!live()) return;
       setLocalKeys(lk);
+      setDataFor(`${me}:${e}`);
       setLoaded(true);
-    })().catch(() => setLoaded(true));
-  }, [me, tick, linkId]);
+    })().catch(() => { if (live()) setLoaded(true); });
+    return () => { stale = true; };
+  }, [me, epoch, tick, linkId]);
 
   // Default selection: the linked petition, else the newest one this role can act on, else the newest.
   const actionable = useCallback(
@@ -156,21 +184,42 @@ export function App() {
   const current = linkId ?? (selected && petitions.some((p) => p.petition_id === selected) ? selected : null) ??
     petitions.find(actionable)?.petition_id ?? petitions[0]?.petition_id ?? null;
 
+  // Pin the automatically chosen ticket, so acting on it (approve, retrieve)
+  // does not make the desk jump to a different petition.
+  const fresh = dataFor === `${me}:${epoch}`;
+  useEffect(() => {
+    if (fresh && !selected && !linkId && current) setSelected(current);
+  }, [fresh, selected, linkId, current]);
+
   const onPersona = async (id: string) => {
+    // switchTo bumps the role epoch first, so any pending retrieval or approval
+    // started by the previous persona is discarded when it resolves.
     setReleased(null);
     setSelected(null);
     setComposing(false);
     await switchTo(id);
   };
 
+  const clearLink = () => {
+    if (window.location.hash) history.replaceState(null, "", window.location.pathname);
+    setLinkId(null);
+  };
+
   const select = (pid: string) => {
-    if (linkId && linkId !== pid) {
-      history.replaceState(null, "", window.location.pathname);
-      setLinkId(null);
-    }
+    if (linkId && linkId !== pid) clearLink();
+    if (pid !== current) setReleased(null); // leaving a ticket drops its plaintext
     setSelected(pid);
     setComposing(false);
   };
+
+  const acceptReleased = (r: Released) => {
+    if (r.viewer !== me || !isCurrentEpoch(r.epoch)) return; // late result for another persona
+    setReleased(r);
+    refresh();
+  };
+
+  const shownReleased =
+    released && released.petitionId === current && released.viewer === me && isCurrentEpoch(released.epoch) ? released : null;
 
   const isAdmin = me === ADMIN;
 
@@ -198,6 +247,12 @@ export function App() {
         {items.length > 0 && me && (
           <>
             <Latest entry={latest} />
+            {!fresh && (
+              <p className="small muted" role="status">
+                Loading the desk for {personaName(personas, me)}…
+              </p>
+            )}
+            {fresh && (
             <div className="bg-desk">
               <section className="bg-queue" aria-labelledby="queue-h">
                 <div className="spread">
@@ -242,7 +297,10 @@ export function App() {
                   <NewPetition
                     items={items}
                     me={me}
+                    epoch={epoch}
                     onOpened={(pid) => {
+                      clearLink(); // a new petition replaces any old link selection
+                      setReleased(null);
                       setComposing(false);
                       setSelected(pid);
                       refresh();
@@ -251,26 +309,25 @@ export function App() {
                   />
                 ) : current ? (
                   <Ticket
-                    key={current}
+                    key={`${me}:${epoch}:${current}`}
                     pid={current}
                     fromLink={current === linkId}
                     me={me}
+                    epoch={epoch}
                     personas={personas}
                     items={items}
                     tick={tick}
-                    released={released && released.petitionId === current ? released : null}
-                    onReleased={(r) => {
-                      setReleased(r);
-                      refresh();
-                    }}
+                    released={shownReleased}
+                    onReleased={acceptReleased}
+                    onHide={() => setReleased(null)}
                     onRotated={async (itemId) => {
                       await confirmRotation(api, itemId);
                       refresh();
                     }}
                     onChanged={refresh}
                     onClose={() => {
-                      history.replaceState(null, "", window.location.pathname);
-                      setLinkId(null);
+                      setReleased(null);
+                      clearLink();
                     }}
                   />
                 ) : (
@@ -280,6 +337,7 @@ export function App() {
                 )}
               </div>
             </div>
+            )}
 
             <ItemsPanel items={items} isAdmin={isAdmin} personas={personas} onChanged={refresh} />
           </>
@@ -338,8 +396,9 @@ function Setup() {
   );
 }
 
-function NewPetition(props: { items: BgItem[]; me: string; onOpened: (pid: string) => void; onCancel: () => void }) {
+function NewPetition(props: { items: BgItem[]; me: string; epoch: number; onOpened: (pid: string) => void; onCancel: () => void }) {
   const { items, me } = props;
+  const live = useLive(props.epoch);
   const [itemId, setItemId] = useState(items[0]?.item_id ?? "");
   const [reason, setReason] = useState("");
   const [windowMin, setWindowMin] = useState(15);
@@ -380,8 +439,8 @@ function NewPetition(props: { items: BgItem[]; me: string; onOpened: (pid: strin
           disabled={busy || !reason.trim()}
           onClick={() =>
             run(async () => {
-              const s = await openPetition(api, ks, me, itemId, reason, windowMin * 60);
-              props.onOpened(s.petition_id);
+              const s = await openPetition(api, ks, me, itemId, reason, windowMin * 60, live);
+              if (live()) props.onOpened(s.petition_id);
             })
           }
         >
@@ -399,11 +458,13 @@ function Ticket(props: {
   pid: string;
   fromLink: boolean;
   me: string;
+  epoch: number;
   personas: Persona[];
   items: BgItem[];
   tick: number;
   released: Released | null;
   onReleased: (r: Released) => void;
+  onHide: () => void;
   onRotated: (itemId: string) => Promise<void>;
   onChanged: () => void;
   onClose: () => void;
@@ -415,16 +476,24 @@ function Ticket(props: {
   const [refused, setRefused] = useState<string | null>(null);
   const [n, setN] = useState(0);
   const { busy, error, run } = useAction();
+  const live = useLive(props.epoch);
 
   useEffect(() => setRefused(null), [pid, me]);
   useEffect(() => {
+    let stale = false;
+    const ok = () => !stale && live();
     setMissing(false);
-    petition(api, pid).then(setP, (e) => {
-      setP(null);
-      if (e instanceof ApiError && e.status === 404) setMissing(true);
-    });
-    hasLocalKey(ks, pid).then(setHaveKey);
-  }, [pid, me, props.tick, n]);
+    petition(api, pid).then(
+      (s) => { if (ok()) setP(s); },
+      (e) => {
+        if (!ok()) return;
+        setP(null);
+        if (e instanceof ApiError && e.status === 404) setMissing(true);
+      },
+    );
+    hasLocalKey(ks, pid).then((k) => { if (ok()) setHaveKey(k); });
+    return () => { stale = true; };
+  }, [pid, me, props.tick, n, live]);
 
   const item = props.items.find((i) => i.item_id === p?.item_id);
   const eligible = p !== null && p.eligible_approvers.includes(me);
@@ -435,10 +504,14 @@ function Ticket(props: {
 
   const doRetrieve = () =>
     run(async () => {
+      const viewer = me;
+      const epoch = props.epoch;
       try {
-        const r = await retrieve(api, ks, pid);
-        props.onReleased({ petitionId: pid, itemId: p!.item_id, secret: r.secret, notice: r.notice });
+        const r = await retrieve(api, ks, pid, live);
+        if (!live()) return; // persona changed while the package was in flight: discard
+        props.onReleased({ petitionId: pid, itemId: p!.item_id, secret: r.secret, notice: r.notice, viewer, epoch });
       } catch (e) {
+        if (e instanceof StaleFlowError || !live()) return;
         if (e instanceof ApiError && (e.status === 410 || e.status === 409 || e.status === 404)) {
           setRefused(
             e.status === 410
@@ -447,7 +520,7 @@ function Ticket(props: {
           );
         } else throw e;
       } finally {
-        setN((x) => x + 1);
+        if (live()) setN((x) => x + 1);
       }
     });
 
@@ -516,17 +589,17 @@ function Ticket(props: {
           <div className="bg-actionstrip" aria-label="Your action">
             {eligible && p.state === "Open" && !approvedByMe && (
               <>
-                <button className="primary" disabled={busy} onClick={() => run(async () => { await approvePetition(api, ks, me, pid); props.onChanged(); setN((x) => x + 1); })}>
+                <button className="primary" disabled={busy} onClick={() => run(async () => { await approvePetition(api, ks, me, pid, live); if (!live()) return; props.onChanged(); setN((x) => x + 1); })}>
                   Approve: encrypt my share to this requester key
                 </button>
-                <button className="danger" disabled={busy} onClick={() => run(async () => { await denyPetition(api, pid); props.onChanged(); setN((x) => x + 1); })}>
+                <button className="danger" disabled={busy} onClick={() => run(async () => { if (!live()) return; await denyPetition(api, pid); if (!live()) return; props.onChanged(); setN((x) => x + 1); })}>
                   Deny
                 </button>
               </>
             )}
             {eligible && approvedByMe && p.state === "Open" && <p className="small">You approved. Another approval from you does not count.</p>}
             {isAdmin && !eligible && (p.state === "Open" || p.state === "Approved") && (
-              <button className="danger" disabled={busy} onClick={() => run(async () => { await denyPetition(api, pid); props.onChanged(); setN((x) => x + 1); })}>
+              <button className="danger" disabled={busy} onClick={() => run(async () => { if (!live()) return; await denyPetition(api, pid); if (!live()) return; props.onChanged(); setN((x) => x + 1); })}>
                 Deny as item admin
               </button>
             )}
@@ -556,8 +629,13 @@ function Ticket(props: {
             <p className="notice danger small">This link stopped working at {p.expires_at}. A new release needs a new petition.</p>
           )}
 
-          {props.released && (
-            <ReleasedView released={props.released} item={item} onRotated={() => run(() => props.onRotated(props.released!.itemId))} />
+          {props.released && props.released.viewer === me && p.requester_id === me && props.released.petitionId === p.petition_id && (
+            <ReleasedView
+              released={props.released}
+              item={item}
+              onHide={props.onHide}
+              onRotated={() => run(() => props.onRotated(props.released!.itemId))}
+            />
           )}
 
           {mine && (
@@ -655,13 +733,19 @@ function ItemsPanel(props: { items: BgItem[]; isAdmin: boolean; personas: Person
   );
 }
 
-function ReleasedView(props: { released: Released; item: BgItem | undefined; onRotated: () => void }) {
+function ReleasedView(props: { released: Released; item: BgItem | undefined; onHide: () => void; onRotated: () => void }) {
   const { released, item } = props;
   const [copied, setCopied] = useState(false);
   return (
     <div className="bg-released" aria-labelledby="rel-h">
-      <h3 id="rel-h">Released to you: {item?.name ?? released.itemId}</h3>
-      <p className="small">Rebuilt from the approvers' shares and decrypted in this browser. Only this item's key was rebuilt.</p>
+      <div className="spread">
+        <h3 id="rel-h">Decrypted and verified in this browser: {item?.name ?? released.itemId}</h3>
+        <button onClick={props.onHide}>Hide</button>
+      </div>
+      <p className="small">
+        Rebuilt from the approvers' shares; every share envelope and the item header checked out here. Only this item's key was rebuilt.
+        Hiding it clears it from this page.
+      </p>
       <div className="secret">{released.secret}</div>
       <div className="row bg-copy">
         <button

@@ -9,7 +9,7 @@ const LABEL: Record<State, string> = {
   Flicker: "Lantern flickering",
   Vigil: "Lantern burning low through the vigil",
   Handover: "Lantern out: handover has started",
-  Released: "Lantern out: the letters were handed over",
+  Released: "Lantern out: the encrypted package was sent to the recovering trustee",
 };
 
 export function Lantern({ state }: { state: State }) {

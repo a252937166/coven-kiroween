@@ -59,6 +59,8 @@ async function shoot(page: Page, name: string, maskSel: string[] = []) {
   await signInAs(page, "Ada");
   await page.getByRole("button", { name: /Open a recovery/ }).click();
   await page.getByRole("button", { name: "Use my stored share" }).click();
+  // Wait until it is sent: switching persona cancels an action that has not been sent yet.
+  await page.getByText("You submitted your share").waitFor();
   for (const t of ["Bram", "Cleo"]) {
     await signInAs(page, t);
     await page.getByRole("button", { name: "Use my stored share" }).click();
