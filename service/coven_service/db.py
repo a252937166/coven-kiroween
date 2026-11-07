@@ -104,7 +104,9 @@ BEGIN SELECT RAISE(ABORT, 'recovery bindings are write-once'); END;
 
 
 def connect(path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(path, isolation_level=None, timeout=10)
+    # One connection per request. FastAPI may run that request's dependencies on
+    # different worker threads, one after another, so allow cross-thread use.
+    conn = sqlite3.connect(path, isolation_level=None, timeout=10, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 10000")
     conn.execute("PRAGMA foreign_keys = ON")

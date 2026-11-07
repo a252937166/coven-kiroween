@@ -101,7 +101,7 @@ def _public(conn, v, now: int, user: str) -> dict:
     v = _observe(conn, v, now)
     due = v["last_checkin_at"] + v["cadence_seconds"]
     items = conn.execute(
-        "SELECT item_id, label, deliver_to, earliest_release, created_at FROM ll_items WHERE vault_id = ? ORDER BY created_at, item_id",
+        "SELECT item_id, label, deliver_to, earliest_release, created_at FROM ll_items WHERE vault_id = ? ORDER BY rowid",
         (v["vault_id"],),
     ).fetchall()
     rec = conn.execute(
@@ -361,7 +361,7 @@ def recovery_package(conn, now: int, user: str, rid: str) -> dict:
     ).fetchall()
     if len(shares) < v["threshold"]:
         raise Rejected(409, "below_quorum", extra={"submitted": len(shares)})
-    items = conn.execute("SELECT * FROM ll_items WHERE vault_id = ? ORDER BY created_at, item_id", (v["vault_id"],)).fetchall()
+    items = conn.execute("SELECT * FROM ll_items WHERE vault_id = ? ORDER BY rowid", (v["vault_id"],)).fetchall()
     out_items = []
     for i in items:
         base = {"item_id": i["item_id"], "label": i["label"], "deliver_to": json.loads(i["deliver_to"]),
@@ -396,7 +396,7 @@ def bundle(conn, now: int, user: str, vault_id: str) -> dict:
     if not _member(v, user):
         raise Rejected(404, "not_found")
     _observe(conn, v, now)
-    items = conn.execute("SELECT * FROM ll_items WHERE vault_id = ? ORDER BY created_at, item_id", (vault_id,)).fetchall()
+    items = conn.execute("SELECT * FROM ll_items WHERE vault_id = ? ORDER BY rowid", (vault_id,)).fetchall()
     append_record(conn, chain_of(vault_id), now, "bundle.exported", {"vault": vault_id, "by": user})
     entries = chain_entries(conn, chain_of(vault_id))
     return {

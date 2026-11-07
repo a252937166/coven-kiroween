@@ -5,15 +5,27 @@
   "license": "MIT",
   "type": "module",
   "workspaces": [
-    "core-ts"
-
+    "core-ts",
+    "ui-kit",
+    "apps/last-light",
+    "apps/break-glass"
   ],
   "engines": {
     "node": ">=22.6"
   },
   "scripts": {
-    "test": "npm test --workspace core-ts",
+    "setup:service": "cd service && uv venv .venv --python 3.12 && uv pip install --python .venv/bin/python -r requirements.txt",
+    "service": "cd service && .venv/bin/python -m coven_service --port 8787 --db coven-demo.sqlite",
+    "build": "npm run build --workspace apps/last-light --workspace apps/break-glass",
+    "last-light": "npm run preview --workspace apps/last-light",
+    "break-glass": "npm run preview --workspace apps/break-glass",
+    "test": "npm test --workspace core-ts && npm run test:service && npm test --workspace ui-kit && node scripts/scan-capture.mjs --self-test && bash scripts/test-check-kiro-tracked.sh",
+    "test:service": "cd service && .venv/bin/python -m pytest -q -p no:cacheprovider tests",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "build": "npm run build --workspaces --if-present"
+    "e2e": "playwright test -c e2e",
+    "recover": "node core-ts/bin/recover.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0"
   }
 }

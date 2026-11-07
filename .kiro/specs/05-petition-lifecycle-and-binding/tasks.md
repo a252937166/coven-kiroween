@@ -13,6 +13,36 @@ Tasks 0, 9 and 10 are M0. Tasks 1 to 8 are M1 and M3.
 
 Newest first. Another run resumes from the first entry.
 
+- **2026-11-07, run 3 (Kiro in Kiro Crew).** Resumed from commit 6136333 and the CLI run's dependency changes (kept). Built and tested tasks 1 to 8 and 9.2. Commands and results, all on fictional data:
+  - `npm test --workspace core-ts`: 35 of 35 pass (node:test + fast-check). Covers T-07, T-10, T-12, T-13 and proposal invariants 1, 3 and 9 (TypeScript side), the offline CLI and the records known-answer vector shared with Python.
+  - `npm run test:service`: 28 of 28 pass (pytest + Hypothesis). Covers T-01 to T-11, T-14, T-15, D1, the Last Light lifecycle and invariant 9. A planted bug (quorum check removed) made 4 HTTP tests and the `RuleBasedStateMachine` fail, then the code was restored.
+  - `npm test --workspace ui-kit`: 2 of 2 pass. Real core-ts cryptography through the real service over HTTP for acceptance scenarios 1 to 4, including CLI recovery from card codes.
+  - `npx playwright test -c e2e`: 2 of 2 pass in Chromium against built apps served with the strict CSP. Break Glass: quorum, duplicate approval, other user refused, single-item release, rotation. Last Light: cards, check-in cancels, typed word code, recovery, bundle, offline CLI, and a scan of requests, service log and bundle for share text (no match).
+  - `node scripts/scan-capture.mjs --self-test`: PASS. Scanner run on that browser run's service log and bundle with Bram's card code: no match.
+  - `scripts/check-kiro-tracked.sh . HEAD` on 12300a0: AG-02 PASS (rehearsal only). `scripts/test-check-kiro-tracked.sh`: 9 of 9 fixtures pass.
+  - Deviations: API paths are prefixed `/api/bg/` (for example `/api/bg/petitions/{id}/release`). Transactions use SQLite `BEGIN IMMEDIATE`, which locks the whole database instead of rows. Demo sessions are a persona picker; long-term private keys are non-extractable `CryptoKey` objects in this browser's IndexedDB, not passphrase-wrapped.
+  - **Next:** 9.3 needs a person to print a card on paper and read it back. 10.3 needs the submission commit.
+
+| Check | Where | Result in run 3 |
+|---|---|---|
+| T-01 | `service/tests/test_petitions.py`, `test_petition_machine.py` | pass |
+| T-02 | `test_petitions.py::test_t02_route_inventory`, `test_t01_t02_…` | pass |
+| T-03 | `test_t03_release_after_quorum…`, `test_t03_expiry_boundary` | pass |
+| T-04 | `test_t04_…`, state machine | pass |
+| T-05 | `test_t04_t05_closed_petitions_and_old_links…` (expire, deny, reseal) | pass |
+| T-06 | `test_t06_split_approvals…`, state machine | pass |
+| T-07 | `core-ts/test/shares.test.ts`, `release.test.ts`, `test_t07_t09_…` | pass |
+| T-08 | `test_t08_write_once_columns` | pass |
+| T-09 | `test_t07_t09_…`, state machine, ui-kit end-to-end | pass |
+| T-10 | `core-ts/test/envelope.test.ts`, `test_t10_key_validation…` | pass |
+| T-11 | `test_t11_eligibility`, `test_t11_concurrent_approvals…`, state machine | pass |
+| T-12 | `core-ts/test/envelope.test.ts` (examples and fast-check) | pass |
+| T-13 | `core-ts/test/release.test.ts` | pass |
+| T-14 | `test_t14_no_material_in_logs`; browser test log scan | pass |
+| T-15 | `test_t15_rotation_follow_up`; browser test | pass |
+| AG-01 | screen rehearsal in `e2e/demos.spec.ts` | rehearsal only; gate not run |
+| AG-02 | `scripts/check-kiro-tracked.sh . HEAD` | rehearsal only; gate needs the submission commit |
+
 - **2026-11-07, run 2 (Kiro).** The shell tool failed every call at the permission step ("permission request failed before it was answered"), including `pwd`. No command ran: no `git init`, no `node`, no tests. File-only work done:
   - design.md: split the approver read path into `GET /petitions/{id}/approver-share` (D7); turned open questions into decisions D1 to D7; added guarantee labels GR-ROT and GR-LOG, rotation copy (section 8), gate dependency table.
   - Added `docs/acceptance/AG-01-printed-card.md`, `docs/acceptance/AG-02-committed-kiro.md`, `.kiro/required-files.txt`, `scripts/check-kiro-tracked.sh`, root `.gitignore` (does not ignore `.kiro/`).
@@ -22,10 +52,10 @@ Newest first. Another run resumes from the first entry.
 
 ## Tasks
 
-- [ ] 0. M0 contract closure
-- [ ] 0.1 Initialise local Git with `.kiro/` tracked and unignored
+- [x] 0. M0 contract closure
+- [x] 0.1 Initialise local Git with `.kiro/` tracked and unignored
   - `git init -b main`; commit the owner's files unchanged plus this spec; run `scripts/check-kiro-tracked.sh . HEAD` as a rehearsal and record the output here.
-  - Note: root `.gitignore` written, it ends with `!.kiro/` and `!.kiro/**`. Git not yet initialised (shell unavailable in run 2).
+  - Done in commit 6136333 (local Kiro CLI run). Rehearsal re-run in run 3 on 12300a0: `AG-02 PASS (5 required files, 14 paths checked for ignore rules)`.
   - _Requirements: AG-02_
   - _Checks: AG-02 rehearsal_
 - [x] 0.2 Resolve the status-versus-share inconsistency in design.md
@@ -35,131 +65,128 @@ Newest first. Another run resumes from the first entry.
   - Doc change; draft defaults kept where compatible with the guarantees.
   - _Requirements: BG-01.2, BG-01.3, BG-03.2, GR-ROT, AG-02_
 
-- [ ] 1. Associated data and approval envelope in `core-ts`
-- [ ] 1.1 Implement canonical AAD encoding in `core-ts/src/envelope.ts`
+- [x] 1. Associated data and approval envelope in `core-ts`
+- [x] 1.1 Implement canonical AAD encoding in `core-ts/src/envelope.ts`
   - Domain tag `coven/v1/approval`, length-prefixed UTF-8 fields, raw 32-byte fingerprint, six fields in the order fixed by the design.
-  - Tests: injectivity across field boundaries (in `test/envelope.test.ts`). Still to add: known-answer vectors; fast-check version.
-  - Note: written, not run.
+  - Tests: known-answer vector, injectivity across field boundaries, fast-check injectivity over random bindings (`core-ts/test/envelope.test.ts`).
   - _Requirements: BG-03.3_
   - _Checks: T-12_
-- [ ] 1.2 Implement ephemeral key generation, validation and fingerprint in `core-ts/src/keys.ts`
+- [x] 1.2 Implement ephemeral key generation, validation and fingerprint in `core-ts/src/keys.ts`
   - Non-extractable P-256 ECDH key pair; 65-byte uncompressed export of the public key; on-curve validation on import; fingerprint = SHA-256 of the encoding.
-  - Note: written, not run.
   - _Requirements: BG-03.1_
   - _Checks: T-10_
-- [ ] 1.3 Implement `sealApproval` and `openApproval`, plus `sealApproverShare` and `openApproverShare`
+- [x] 1.3 Implement `sealApproval` and `openApproval`, plus `sealApproverShare` and `openApproverShare`
   - Envelope v1: version byte, approver ephemeral key, nonce, AES-256-GCM ciphertext. ECDH plus HKDF-SHA-256 with salt = fingerprint.
-  - Tests: each of the five string fields, the requester key and every ciphertext bit. Still to add: fast-check version once `fast-check` is installed.
-  - Note: written, not run.
+  - Tests: each of the five string fields, the requester key and every ciphertext bit, plus a fast-check property over random bindings.
   - _Requirements: BG-03.3, BG-03.4_
   - _Checks: T-12_
 
-- [ ] 2. Seal versions
-- [ ] 2.1 Implement browser sealing and resealing
+- [x] 2. Seal versions
+- [x] 2.1 Implement browser sealing and resealing
   - Fresh random item key per version; client-chosen UUIDv4 `seal_version_id`; header AAD binds `item_id` and `seal_version_id`; new share set per version, each share sealed with `sealApproverShare`.
   - _Requirements: BG-02.1, BG-02.4_
   - _Checks: T-07_
-- [ ] 2.2 Implement `SealVersion` storage and `activate_seal_version` in `service/coven_service/petitions.py`
+- [x] 2.2 Implement `SealVersion` storage and `activate_seal_version` in `service/coven_service/petitions.py`
   - Immutable version rows; reject reused version IDs; one transaction sets the current version, moves old-version petitions to `Invalidated` and appends record events.
   - _Requirements: BG-02.1, BG-02.3_
   - _Checks: T-09_
-- [ ] 2.3 Write cross-version tests
+- [x] 2.3 Write cross-version tests
   - Old item key, old shares and old envelopes all fail the new version's header check. Old approvals count zero on a new-version petition.
   - _Requirements: BG-02.3, BG-02.4_
   - _Checks: T-07, T-09_
 
-- [ ] 3. Petition creation
-- [ ] 3.1 Implement `POST /petitions`
+- [x] 3. Petition creation
+- [x] 3.1 Implement `POST /petitions`
   - Requester identity from the session only; reject extra fields; validate the public key with `from_encoded_point`; bind the current seal version and `expires_at = now + min(requested, 3600)` in one transaction; store the fingerprint.
   - _Requirements: BG-02.2, BG-03.1_
   - _Checks: T-08, T-10_
-- [ ] 3.2 Enforce write-once petition columns
+- [x] 3.2 Enforce write-once petition columns
   - No update path in the repository layer; a database trigger rejects updates to the bound columns.
   - _Requirements: BG-02.2, BG-03.1_
   - _Checks: T-08_
-- [ ] 3.3 Implement requester key storage in the browser
+- [x] 3.3 Implement requester key storage in the browser
   - Store the `CryptoKey` in IndexedDB by `petition_id`; show the locally computed fingerprint; delete the key after local decryption or when the petition is terminal.
   - _Requirements: BG-03.1_
   - _Checks: T-10_
 
-- [ ] 4. Approver enrollment and approval
-- [ ] 4.1 Implement approver key enrollment
+- [x] 4. Approver enrollment and approval
+- [x] 4.1 Implement approver key enrollment
   - Bind the validated long-term public key to the authenticated account.
   - _Requirements: BG-03.2_
   - _Checks: T-11_
-- [ ] 4.2 Implement `GET /petitions/{id}/approver-share`
+- [x] 4.2 Implement `GET /petitions/{id}/approver-share`
   - Eligible approvers for the version only (404 otherwise); 409 unless `Open`, current and before expiry; returns only the caller's own blob plus status fields.
   - _Requirements: BG-01.1, BG-03.2_
   - _Checks: T-02, T-11_
-- [ ] 4.3 Implement `POST /petitions/{id}/approvals`
+- [x] 4.3 Implement `POST /petitions/{id}/approvals`
   - Locked transaction with the checks in design section 3; unique `(petition_id, approver_id)`; idempotent repeats; move to `Approved` at k; reject later approvals.
   - _Requirements: BG-03.2, BG-01.4_
   - _Checks: T-06, T-11_
-- [ ] 4.4 Implement the approver client flow
+- [x] 4.4 Implement the approver client flow
   - Call `/approver-share`; validate the key and compute the fingerprint locally; open own blob; seal with the six-field AAD; upload.
   - _Requirements: BG-03.3_
   - _Checks: T-12_
-- [ ] 4.5 Write the concurrency test
+- [x] 4.5 Write the concurrency test
   - Parallel duplicate approvals from one identity count once; parallel approvals from distinct identities stop at exactly k stored envelopes.
   - _Requirements: BG-03.2, BG-01.4_
   - _Checks: T-11, T-06_
-- [ ] 4.6 Implement deny
+- [x] 4.6 Implement deny
   - Eligible approver or item administrator; `Open` or `Approved` to `Denied` (decision D2).
   - _Requirements: BG-01.3_
   - _Checks: T-04_
 
-- [ ] 5. Release decision
-- [ ] 5.1 Implement `release_decision` and `GET /petitions/{id}/release`
+- [x] 5. Release decision
+- [x] 5.1 Implement `release_decision` and `GET /petitions/{id}/release`
   - One transaction with row locks on petition and item; the five conditions from design section 5 read in that transaction; `Cache-Control: no-store`; first success moves to `Released` and sets `rotation_required`.
   - _Requirements: BG-01.2, GR-ROT_
   - _Checks: T-03, T-15_
-- [ ] 5.2 Implement rejection paths
+- [x] 5.2 Implement rejection paths
   - 404 for a non-requester; 409 below quorum; 410 for denied, invalidated or expired; expiry evaluated at decision time with `now >= expires_at` rejecting; no material read before the checks pass.
   - _Requirements: BG-01.1, BG-01.3_
   - _Checks: T-03, T-04, T-05_
-- [ ] 5.3 Implement the status endpoint `GET /petitions/{id}`
+- [x] 5.3 Implement the status endpoint `GET /petitions/{id}`
   - Status fields only (design section 3 table).
   - _Requirements: BG-01.1_
   - _Checks: T-01, T-02_
-- [ ] 5.4 Write the endpoint inventory test
+- [x] 5.4 Write the endpoint inventory test
   - Scan the route table and response schemas; only `/release` may return item ciphertext, header or envelopes; `/approver-share` returns only the caller's blob; no static or blob URLs.
   - _Requirements: BG-01.1_
   - _Checks: T-02_
 
-- [ ] 6. Requester client verification and decryption
-- [ ] 6.1 Implement package verification in the requester client
+- [x] 6. Requester client verification and decryption
+- [x] 6.1 Implement package verification in the requester client
   - Rebuild AAD from the local petition record; reject duplicate approver IDs, fewer than k envelopes, GCM failures and duplicate share indices; pass only verified shares to `combine`.
   - _Requirements: BG-03.4_
   - _Checks: T-13_
-- [ ] 6.2 Combine, check the header, then decrypt the item
+- [x] 6.2 Combine, check the header, then decrypt the item
   - Decrypt the item only after the version header check passes.
   - _Requirements: BG-02.4, BG-03.4_
   - _Checks: T-07, T-13_
 
-- [ ] 7. Petition lifecycle and rotation
-- [ ] 7.1 Implement the state machine with terminal `Expired`, `Denied` and `Invalidated`
+- [x] 7. Petition lifecycle and rotation
+- [x] 7.1 Implement the state machine with terminal `Expired`, `Denied` and `Invalidated`
   - Transitions as drawn in design section 7; record events with IDs, states, counts and fingerprint only.
   - _Requirements: BG-01.3, BG-02.3_
   - _Checks: T-04, T-09_
-- [ ] 7.2 Write the Hypothesis `RuleBasedStateMachine` for petitions
+- [x] 7.2 Write the Hypothesis `RuleBasedStateMachine` for petitions
   - Rules: create, approve (eligible, ineligible, repeat), deny, reseal, advance clock, retrieve as requester and as another user, fetch approver share. Invariants: no material below quorum or from a terminal state; no transition out of a terminal state; count equals distinct eligible approvers.
   - _Requirements: BG-01.1, BG-01.3, BG-01.4, BG-02.3, BG-03.2_
   - _Checks: T-01, T-04, T-06, T-09, T-11_
-- [ ] 7.3 Write the old-link test
+- [x] 7.3 Write the old-link test
   - Save a petition URL; after expiry, denial and reseal, the requester gets no material from it; another authenticated user gets 404 at every stage.
   - _Requirements: BG-01.3_
   - _Checks: T-05_
-- [ ] 7.4 Implement rotation confirmation and release-screen copy
+- [x] 7.4 Implement rotation confirmation and release-screen copy
   - `POST /items/{id}/rotation-confirmed`; release screen uses the design section 8 sentence verbatim.
   - _Requirements: GR-ROT_
   - _Checks: T-15_
 
-- [ ] 8. Logging boundary
-- [ ] 8.1 Add the per-route log field allowlist
+- [x] 8. Logging boundary
+- [x] 8.1 Add the per-route log field allowlist
   - Exclude approval request bodies and release and approver-share response bodies from access logs, error reports and traces.
   - _Requirements: GR-LOG_
   - _Checks: T-14_
-- [ ] 8.2 Write the log capture test
+- [x] 8.2 Write the log capture test
   - Run a full petition through release; scan captured logs for envelope, blob and ciphertext bytes in hex and base64.
   - _Requirements: GR-LOG_
   - _Checks: T-14_
@@ -168,22 +195,25 @@ Newest first. Another run resumes from the first entry.
 - [x] 9.1 Write `docs/acceptance/AG-01-printed-card.md`
   - Procedure, dependencies (physical printer, person reading paper, M2 recovery flow), evidence and pass rule. Doc task; no code check applies.
   - _Requirements: AG-01_
-- [ ] 9.2 Write the capture scanner `scripts/scan-capture.mjs` with a self-test on fictional data
+- [x] 9.2 Write the capture scanner `scripts/scan-capture.mjs` with a self-test on fictional data
   - Search for raw share bytes (hex, base64, base64url), the `coven1:` payload, and the word code with and without separators in any case. Exit non-zero on any match. Print only file and offset.
+  - `node scripts/scan-capture.mjs --self-test`: PASS (7 leak forms detected, clean capture clean).
   - _Requirements: AG-01_
 - [ ] 9.3 Run AG-01 with a physical printed card when the Last Light recovery flow exists, and record the result
-  - Blocked on: M2 recovery flow; physical printing by a person.
+  - Recovery flow now exists. Screen rehearsal passed in run 3 (see progress log); it is not a pass.
+  - Blocked on: a person printing a card on paper and reading it back.
   - _Requirements: AG-01_
 
 - [ ] 10. Acceptance gate AG-02: define in M0, run on the submission commit
-- [ ] 10.1 Write `scripts/check-kiro-tracked.sh` and `.kiro/required-files.txt`
-  - Both written. Note: written, not run. Done when the rehearsal in 0.1 passes.
+- [x] 10.1 Write `scripts/check-kiro-tracked.sh` and `.kiro/required-files.txt`
+  - Rehearsal passes (see 0.1).
   - _Requirements: AG-02_
 - [x] 10.1a Write `docs/acceptance/AG-02-committed-kiro.md`
   - Doc task; no code check applies.
   - _Requirements: AG-02_
-- [ ] 10.2 Add a fixture test for the script
+- [x] 10.2 Add a fixture test for the script
   - A temporary repository where `.gitignore` ignores an already tracked `.kiro/` file must FAIL; a clean one must PASS.
+  - `scripts/test-check-kiro-tracked.sh`: 9 fixtures pass (2 PASS cases, 7 FAIL cases).
   - _Requirements: AG-02_
 - [ ] 10.3 Run AG-02 on the submission commit and record the SHA and result
   - Blocked on: the final submission commit (M5).

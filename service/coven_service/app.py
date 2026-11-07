@@ -42,6 +42,13 @@ PERSONAS: dict[str, dict[str, str]] = {
 }
 
 COOKIE = "coven_session"
+APPS = {"break-glass": "coven_session_bg", "last-light": "coven_session_ll"}
+
+
+def cookie_name(request: Request) -> str:
+    """Browsers share cookies across localhost ports, so each app sends
+    X-Coven-App and gets its own session cookie."""
+    return APPS.get(request.headers.get("x-coven-app", ""), COOKIE)
 
 
 class Strict(BaseModel):
@@ -162,7 +169,7 @@ def create_app(db_path: str, clock: Clock | None = None, demo: bool = True) -> F
             c.close()
 
     def user(request: Request, c=Depends(conn)) -> str:
-        token = request.cookies.get(COOKIE)
+        token = request.cookies.get(cookie_name(request))
         row = c.execute("SELECT user_id FROM sessions WHERE token = ?", (token or "",)).fetchone()
         if row is None:
             raise Rejected(401, "not_signed_in")
@@ -182,7 +189,7 @@ def create_app(db_path: str, clock: Clock | None = None, demo: bool = True) -> F
     if demo:
 
         @app.post("/api/session")
-        def sign_in(body: SessionIn, c=Depends(conn)):
+        def sign_in(body: SessionIn, request: Request, c=Depends(conn)):
             if body.user not in PERSONAS:
                 raise Rejected(404, "unknown_persona")
             token = secrets.token_urlsafe(32)
@@ -190,7 +197,7 @@ def create_app(db_path: str, clock: Clock | None = None, demo: bool = True) -> F
                 c.execute("INSERT INTO sessions(token, user_id, created_at) VALUES (?, ?, ?)",
                           (token, body.user, clock.now(c)))
             resp = JSONResponse({"user": body.user, **PERSONAS[body.user]})
-            resp.set_cookie(COOKIE, token, httponly=True, samesite="strict", path="/")
+            resp.set_cookie(cookie_name(request), token, httponly=True, samesite="strict", path="/")
             return resp
 
         @app.get("/api/demo/clock")
@@ -204,14 +211,15 @@ def create_app(db_path: str, clock: Clock | None = None, demo: bool = True) -> F
             return {"server_now": iso(clock.now(c)), "offset_seconds": clock.offset(c)}
 
         @app.post("/api/demo/reset")
-        def reset(c=Depends(conn)):
+        def reset(request: Request, c=Depends(conn)):
             with db.tx(c):
                 for t in ("sessions", "enrolled_keys", "records", "mail", "bg_approvals", "bg_petitions",
                           "bg_approver_shares", "bg_seal_versions", "bg_items", "ll_recovery_shares",
                           "ll_recoveries", "ll_items", "ll_trustee_shares", "ll_vaults", "settings"):
                     c.execute(f"DELETE FROM {t}")
             resp = JSONResponse({"reset": True})
-            resp.delete_cookie(COOKIE, path="/")
+            for name in (COOKIE, *APPS.values()):
+                resp.delete_cookie(name, path="/")
             return resp
 
     @app.get("/api/session")
