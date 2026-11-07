@@ -224,6 +224,68 @@ test("Break Glass role isolation: a late release across a persona switch, leavin
   await expect(page.getByRole("region", { name: "Petition link" })).toHaveCount(0);
   expect(new URL(page.url()).hash).toBe("");
 });
+
+test("Break Glass session lock: one sign-in at a time, UI inactive meanwhile, persona matches the session", async () => {
+  await signInAs(page, "Robin");
+  await expect(page.getByRole("button", { name: "New petition" })).toBeVisible();
+  let posts = 0;
+  let inFlight = 0;
+  let maxInFlight = 0;
+  await page.route("**/api/session", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    posts++;
+    inFlight++;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    const response = await route.fetch();
+    await sleep(1500); // hold the sign-in answer (and its Set-Cookie)
+    await route.fulfill({ response });
+    inFlight--;
+  });
+
+  const select = page.getByLabel("Signed in as");
+  await select.selectOption({ label: "Sage · Approver" });
+  // While pending: the selector, the desk and the demo controls are inactive.
+  await expect(select).toBeDisabled();
+  await expect(page.locator("main#desk")).toHaveAttribute("inert", "");
+  await expect(page.locator("main#desk")).toHaveAttribute("aria-busy", "true");
+  await expect(page.locator(".bg-demo")).toHaveAttribute("inert", "");
+  await expect(page.getByRole("button", { name: "New petition" })).toHaveCount(0); // desk not shown while pending
+  // Demo controls stay visible but cannot be focused or used: they sit under an inert ancestor.
+  for (const name of ["+5 min", "+30 min", "Reset demo"]) {
+    const inactive = await page.getByRole("button", { name }).evaluate((el: HTMLElement) => {
+      el.focus();
+      return el.closest("[inert]") !== null && document.activeElement !== el;
+    });
+    expect(inactive, name).toBe(true);
+  }
+  // A second switch forced onto the disabled selector must not start another sign-in.
+  await select.selectOption({ label: "Kit · Engineer" }, { force: true }).catch(() => {});
+  await expect(select).toBeEnabled({ timeout: 10_000 });
+  expect(posts).toBe(1);
+  expect(maxInFlight).toBe(1);
+  await page.unroute("**/api/session");
+
+  // The UI persona is the one the session cookie actually holds.
+  const actual = await page.evaluate(async () => {
+    const r = await fetch("/api/session", { headers: { "X-Coven-App": "break-glass" }, cache: "no-store" });
+    return (await r.json()).user as string;
+  });
+  expect(actual).toBe("user:sage");
+  await expect(select).toHaveValue(actual);
+  await expect(page.locator("main#desk")).not.toHaveAttribute("inert", "");
+  await expect(page.getByRole("button", { name: "New petition" })).toBeVisible();
+
+  // Re-selecting the current persona sends no sign-in.
+  let repeat = 0;
+  const onReq = (r: Request) => {
+    if (r.method() === "POST" && r.url().endsWith("/api/session")) repeat++;
+  };
+  page.on("request", onReq);
+  await select.selectOption({ label: "Sage · Approver" });
+  await sleep(500);
+  page.off("request", onReq);
+  expect(repeat).toBe(0);
+});
 });
 
 test("Last Light: cards, check-in cancels, recovery with a typed code, offline CLI", async ({ page }) => {

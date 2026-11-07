@@ -117,7 +117,7 @@ function remaining(expires: string, now: string) {
 }
 
 export function App() {
-  const { personas, me, switchTo, epoch } = usePersonas(api, "break-glass", "user:robin");
+  const { personas, me, switchTo, epoch, pending, runSignedInFlow } = usePersonas(api, "break-glass", "user:robin");
   const [items, setItems] = useState<BgItem[]>([]);
   const [petitions, setPetitions] = useState<PetitionStatus[]>([]);
   const [localKeys, setLocalKeys] = useState<Record<string, boolean>>({});
@@ -141,7 +141,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!me) return;
+    if (!me || pending) return; // never load role-scoped data while the session is changing
     let stale = false;
     const e = currentEpoch();
     const live = () => !stale && isCurrentEpoch(e);
@@ -172,7 +172,7 @@ export function App() {
       setLoaded(true);
     })().catch(() => { if (live()) setLoaded(true); });
     return () => { stale = true; };
-  }, [me, epoch, tick, linkId]);
+  }, [me, epoch, pending, tick, linkId]);
 
   // Default selection: the linked petition, else the newest one this role can act on, else the newest.
   const actionable = useCallback(
@@ -186,7 +186,7 @@ export function App() {
 
   // Pin the automatically chosen ticket, so acting on it (approve, retrieve)
   // does not make the desk jump to a different petition.
-  const fresh = dataFor === `${me}:${epoch}`;
+  const fresh = !pending && dataFor === `${me}:${epoch}`;
   useEffect(() => {
     if (fresh && !selected && !linkId && current) setSelected(current);
   }, [fresh, selected, linkId, current]);
@@ -232,18 +232,21 @@ export function App() {
           <span className="bg-wordmark">Break Glass</span>
           <span className="bg-tagline">Incident credential desk</span>
         </div>
-        <RoleSwitch personas={personas} me={me} onPersona={onPersona} />
+        <RoleSwitch personas={personas} me={me} onPersona={onPersona} pending={pending} />
         {me && <p className="bg-role small">{personaRole(personas, me)}</p>}
         <nav aria-label="Sections" className="bg-nav">
           <a href="#desk">Requests</a>
           <a href="#items-h">Sealed items</a>
           <a href="#proof-h">Proof and mail</a>
         </nav>
-        <DemoClock api={api} ks={ks} serverNow={now} steps={[clock.minutes(5), clock.minutes(30)]} onChanged={refresh} />
+        {/* While any sign-in is in flight, demo controls and the desk are inert. */}
+        <div className="bg-demo" inert={pending}>
+          <DemoClock api={api} ks={ks} serverNow={now} steps={[clock.minutes(5), clock.minutes(30)]} onChanged={refresh} />
+        </div>
       </aside>
 
-      <main className="bg-main" id="desk">
-        {loaded && items.length === 0 && <Setup />}
+      <main className="bg-main" id="desk" inert={pending} aria-busy={pending}>
+        {loaded && items.length === 0 && <Setup runSignedInFlow={runSignedInFlow} />}
         {items.length > 0 && me && (
           <>
             <Latest entry={latest} />
@@ -376,7 +379,7 @@ function Latest({ entry }: { entry: RecordEntry | null }) {
   );
 }
 
-function Setup() {
+function Setup({ runSignedInFlow }: { runSignedInFlow: <T>(fn: () => Promise<T>) => Promise<T | undefined> }) {
   const [log, setLog] = useState<string[]>([]);
   const { busy, error, run } = useAction();
   return (
@@ -387,7 +390,17 @@ function Setup() {
         This creates a key pair in this browser for each persona, enrolls the public keys, and has Quinn seal three fictional credentials.
         Each credential gets its own key, split 2 of 4 among Sage, Rowan, Ash and Wren.
       </p>
-      <button className="primary" disabled={busy} onClick={() => run(async () => { await setupDemo(api, ks, (s) => setLog((l) => [...l, s])); window.location.reload(); })}>
+      <button
+        className="primary"
+        disabled={busy}
+        onClick={() =>
+          run(async () => {
+            // Internal sign-ins and key enrollment hold the session lock: no manual switch can interleave.
+            await runSignedInFlow(() => setupDemo(api, ks, (s) => setLog((l) => [...l, s])));
+            window.location.reload();
+          })
+        }
+      >
         Set up demo
       </button>
       <ErrorLine error={error} />

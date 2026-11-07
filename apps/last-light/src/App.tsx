@@ -95,13 +95,13 @@ function useLive(epoch: number) {
 }
 
 export function App() {
-  const { personas, me, switchTo, epoch } = usePersonas(api, "last-light", OWNER);
+  const { personas, me, switchTo, epoch, pending, runSignedInFlow } = usePersonas(api, "last-light", OWNER);
   const [vaults, setVaults] = useState<VaultStatus[] | null>(null);
   const [tick, setTick] = useState(0);
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
   useEffect(() => {
-    if (!me) return;
+    if (!me || pending) return; // never load role-scoped data while the session is changing
     let stale = false;
     const e = currentEpoch();
     listVaults(api).then(
@@ -109,7 +109,7 @@ export function App() {
       () => { if (!stale) setVaults([]); },
     );
     return () => { stale = true; };
-  }, [me, epoch, tick]);
+  }, [me, epoch, pending, tick]);
 
   const v = vaults?.[0];
   const latest = useLatestRecord(api, v ? `ll:${v.vault_id}` : null, `${tick}-${me}-${v?.receipt.length}`);
@@ -122,14 +122,15 @@ export function App() {
           <span className="ll-wordmark">Last Light</span>
           <span className="ll-tagline">A family archive, opened together when it is needed.</span>
         </div>
-        <RoleSwitch personas={personas} me={me} onPersona={switchTo} />
+        <RoleSwitch personas={personas} me={me} onPersona={switchTo} pending={pending} />
       </header>
-      <div className="ll-demo">
+      {/* While any sign-in is in flight, everything role-scoped is inert. */}
+      <div className="ll-demo" inert={pending}>
         <DemoClock api={api} ks={ks} serverNow={v?.server_now ?? null} steps={[clock.days(7), clock.days(30)]} onChanged={refresh} />
       </div>
 
-      <main id="main" className="ll-main">
-        {vaults && vaults.length === 0 && me === OWNER && <Setup />}
+      <main id="main" className="ll-main" inert={pending} aria-busy={pending}>
+        {vaults && vaults.length === 0 && me === OWNER && <Setup runSignedInFlow={runSignedInFlow} />}
         {vaults && vaults.length === 0 && me !== OWNER && (
           <section className="ll-folio">
             <p>No vault yet. Switch to Mara Hollow (vault owner) to set up the demo.</p>
@@ -139,7 +140,7 @@ export function App() {
       </main>
 
       {v && me && (
-        <aside className="ll-proof" aria-labelledby="proof-h">
+        <aside className="ll-proof" aria-labelledby="proof-h" inert={pending}>
           <h2 id="proof-h" className="ll-section-title">Proof, mail and offline copy</h2>
           <div className="ll-proof-grid">
             <details className="evidence">
@@ -167,7 +168,7 @@ export function App() {
   );
 }
 
-function Setup() {
+function Setup({ runSignedInFlow }: { runSignedInFlow: <T>(fn: () => Promise<T>) => Promise<T | undefined> }) {
   const [log, setLog] = useState<string[]>([]);
   const { busy, error, run } = useAction();
   return (
@@ -185,7 +186,13 @@ function Setup() {
         <button
           className="primary"
           disabled={busy}
-          onClick={() => run(async () => { await setupDemo(api, ks, (s) => setLog((l) => [...l, s])); window.location.reload(); })}
+          onClick={() =>
+            run(async () => {
+              // Internal sign-ins and key enrollment hold the session lock: no manual switch can interleave.
+              await runSignedInFlow(() => setupDemo(api, ks, (s) => setLog((l) => [...l, s])));
+              window.location.reload();
+            })
+          }
         >
           Set up demo
         </button>

@@ -1,8 +1,11 @@
 // Shared React pieces for both apps. Layout and look belong to each app.
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { Receipt, RecordEntry, ReceiptOutcome } from "@coven/core-ts/records";
 import { Api, ApiError } from "./api.ts";
+import { sessionLock, withSessionLock } from "./session.ts";
+
+export { sessionBusy, withSessionLock } from "./session.ts";
 import { advanceClock, checkChain, mail, parseReceipt, resetDemo, type Mail, type Persona } from "./common.ts";
 import type { KeyStore } from "./keystore.ts";
 
@@ -79,11 +82,25 @@ export function CovenMark() {
 }
 
 /** Switches which fictional persona is signed in. Navigation only: no other side effect. */
-export function RoleSwitch({ personas, me, onPersona }: { personas: Persona[]; me: string | null; onPersona: (id: string) => void }) {
+export function RoleSwitch(props: {
+  personas: Persona[];
+  me: string | null;
+  onPersona: (id: string) => void;
+  /** True while any sign-in (manual switch, start-up or demo setup) is in flight. */
+  pending?: boolean;
+}) {
+  const { personas, me, onPersona, pending = false } = props;
   return (
     <div className="role-switch">
       <label htmlFor="persona">Signed in as</label>
-      <select id="persona" value={me ?? ""} onChange={(e) => onPersona(e.target.value)}>
+      <select
+        id="persona"
+        value={me ?? ""}
+        disabled={pending}
+        aria-busy={pending || undefined}
+        onChange={(e) => onPersona(e.target.value)}
+      >
+        {me === null && <option value="">…</option>}
         {personas.map((p) => (
           <option key={p.id} value={p.id}>
             {p.name} · {p.role}
@@ -266,35 +283,95 @@ export function isCurrentEpoch(e: number): boolean {
   return e === roleEpoch.n;
 }
 
-/** Load personas for this app and keep a signed-in session. */
+export function useSessionBusy(): boolean {
+  const [busy, setBusy] = useState(sessionLock.busy);
+  useEffect(() => {
+    sessionLock.listeners.add(setBusy);
+    setBusy(sessionLock.busy);
+    return () => {
+      sessionLock.listeners.delete(setBusy);
+    };
+  }, []);
+  return busy;
+}
+
+async function actualSession(api: Api): Promise<string | null> {
+  try {
+    return (await api.get<{ user: string }>("/api/session")).user;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load personas for this app and keep a signed-in session. `me` is always the
+ * persona the service reports for the session cookie, read back after every
+ * sign-in, so the UI never claims a persona the cookie does not hold.
+ */
 export function usePersonas(api: Api, app: string, fallback: string) {
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [me, setMe] = useState<string | null>(null);
   const [epoch, setEpoch] = useState(roleEpoch.n);
+  const pending = useSessionBusy();
+  const meRef = useRef<string | null>(null);
+  const settle = (user: string | null) => {
+    meRef.current = user;
+    setMe(user);
+  };
+
   useEffect(() => {
-    (async () => {
+    void withSessionLock(async () => {
       const all = await api.get<Persona[]>("/api/personas");
       setPersonas(all.filter((p) => p.app === app));
-      try {
-        const s = await api.get<{ user: string }>("/api/session");
-        setMe(s.user);
-      } catch {
-        await api.signIn(fallback);
-        setMe(fallback);
+      let user = await actualSession(api);
+      if (user === null) {
+        try {
+          await api.signIn(fallback);
+        } catch {
+          // ambiguous: the cookie may or may not have been set; read it back below
+        }
+        user = await actualSession(api);
       }
-    })();
+      settle(user);
+    });
   }, [api, app, fallback]);
+
   const switchTo = useCallback(
     async (id: string) => {
-      roleEpoch.n += 1;
-      const e = roleEpoch.n;
-      setEpoch(e); // remount role-scoped views now, before the network round trip
-      await api.signIn(id);
-      if (isCurrentEpoch(e)) setMe(id);
+      if (id === meRef.current) return; // already this persona: no sign-in
+      await withSessionLock(async () => {
+        roleEpoch.n += 1;
+        const e = roleEpoch.n;
+        setEpoch(e); // remount role-scoped views now, before the network round trip
+        try {
+          await api.signIn(id);
+        } catch {
+          // ambiguous failure: confirm which session the cookie actually holds
+        }
+        const user = await actualSession(api);
+        if (isCurrentEpoch(e)) settle(user);
+      });
     },
     [api],
   );
-  return { personas, me, switchTo, epoch };
+
+  /** For flows that sign in internally (demo setup): run under the same lock, then re-read the session. */
+  const runSignedInFlow = useCallback(
+    async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
+      return withSessionLock(async () => {
+        roleEpoch.n += 1;
+        setEpoch(roleEpoch.n);
+        try {
+          return await fn();
+        } finally {
+          settle(await actualSession(api));
+        }
+      });
+    },
+    [api],
+  );
+
+  return { personas, me, switchTo, epoch, pending, runSignedInFlow };
 }
 
 export function personaName(personas: Persona[], id: string) {

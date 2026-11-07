@@ -35,7 +35,8 @@
 .bg-nav a { color: #ffffff; text-decoration: none; padding: 0.3rem 0.5rem; border-radius: 6px; }
 .bg-nav a:hover { background: #22395a; }
 .bg-rail :focus-visible { outline-color: #ffffff; }
-.bg-rail .demo-strip { color: #c7d3e3; border-top: 1px solid #2c4364; padding-top: 0.9rem; margin-top: auto; }
+.bg-demo { margin-top: auto; }
+.bg-rail .demo-strip { color: #c7d3e3; border-top: 1px solid #2c4364; padding-top: 0.9rem; }
 .bg-rail .demo-strip button { background: #0c1a2b; color: #ffffff; border-color: #3a5170; }
 .bg-rail .demo-strip button.danger { color: #ffb4a8; border-color: #7a3d37; }
 .bg-rail .error { color: #ffb4a8; }
@@ -126,7 +127,7 @@
   .bg-app { grid-template-columns: 1fr; }
   .bg-rail { gap: 0.7rem; }
   .bg-nav { flex-direction: row; flex-wrap: wrap; }
-  .bg-rail .demo-strip { margin-top: 0; }
+  .bg-demo { margin-top: 0; }
   .bg-main { padding: 1rem 0.9rem 3rem; }
   .bg-facts { grid-template-columns: 1fr; }
   .bg-facts > div { border-right: 0; border-bottom: 1px solid var(--border); padding: 0.7rem 1rem; }
