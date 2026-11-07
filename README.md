@@ -65,6 +65,10 @@ node core-ts/bin/recover.js verify last-light-bundle-XXXX.json --receipt <length
 
 "Reset demo" deletes all demo data and this browser's demo keys. One browser plays every persona; that is a demo simplification.
 
+## Screenshots
+
+`docs/screenshots/` holds 1440 px and 390 px views of both apps (fictional data; revealed content masked). Regenerate with `scripts/screenshots.ts` against a disposable service.
+
 ## Tests
 
 ```sh

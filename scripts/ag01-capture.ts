@@ -71,6 +71,8 @@ const vaultName = (await page.locator(".share-card p").first().textContent())!.r
 await page.pdf({ path: join(runDir, "bram-share-card.pdf"), format: "A4", printBackground: true });
 chmodSync(join(runDir, "bram-share-card.pdf"), 0o600);
 
+const bundleSummary = page.locator("summary", { hasText: "Offline bundle" });
+if (await bundleSummary.count()) await bundleSummary.click(); // redesigned layout keeps the bundle in a disclosure
 const download = page.waitForEvent("download");
 await page.getByRole("button", { name: "Download bundle" }).click();
 await (await download).saveAs(join(runDir, "bundle.json"));

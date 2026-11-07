@@ -1,0 +1,80 @@
+[
+  {
+    "file": "docs/screenshots/last-light-first-run-1440.png",
+    "width": 1440,
+    "horizontalOverflowPx": 0
+  },
+  {
+    "file": "docs/screenshots/last-light-first-run-390.png",
+    "width": 390,
+    "horizontalOverflowPx": 0
+  },
+  {
+    "file": "docs/screenshots/last-light-owner-1440.png",
+    "width": 1440,
+    "horizontalOverflowPx": 0
+  },
+  {
+    "file": "docs/screenshots/last-light-owner-390.png",
+    "width": 390,
+    "horizontalOverflowPx": 0
+  },
+  {
+    "file": "docs/screenshots/last-light-focus-390.png",
+    "focused": "<select id=\"persona\"><option value=\"user:mara\">Mara Hollow · Vault owner</option"
+  },
+  {
+    "file": "docs/screenshots/last-light-trustee-ready-1440.png",
+    "width": 1440,
+    "horizontalOverflowPx": 0
+  },
+  {
+    "file": "docs/screenshots/last-light-trustee-ready-390.png",
+    "width": 390,
+    "horizontalOverflowPx": 0
+  },
+  {
+    "file": "docs/screenshots/last-light-released-1440.png",
+    "width": 1440,
+    "horizontalOverflowPx": 0
+  },
+  {
+    "file": "docs/screenshots/last-light-released-390.png",
+    "width": 390,
+    "horizontalOverflowPx": 0
+  },
+  {
+    "file": "docs/screenshots/break-glass-first-run-1440.png",
+    "width": 1440,
+    "horizontalOverflowPx": 0
+  },
+  {
+    "file": "docs/screenshots/break-glass-first-run-390.png",
+    "width": 390,
+    "horizontalOverflowPx": 0
+  },
+  {
+    "file": "docs/screenshots/break-glass-approver-1440.png",
+    "width": 1440,
+    "horizontalOverflowPx": 0
+  },
+  {
+    "file": "docs/screenshots/break-glass-approver-390.png",
+    "width": 390,
+    "horizontalOverflowPx": 0
+  },
+  {
+    "file": "docs/screenshots/break-glass-focus-390.png",
+    "focused": "<button class=\"danger\">Deny</button>"
+  },
+  {
+    "file": "docs/screenshots/break-glass-released-1440.png",
+    "width": 1440,
+    "horizontalOverflowPx": 0
+  },
+  {
+    "file": "docs/screenshots/break-glass-released-390.png",
+    "width": 390,
+    "horizontalOverflowPx": 0
+  }
+]

@@ -1,2 +1,115 @@
-/* Last Light: warm lantern accent (shared default). */
-summary { cursor: pointer; font-weight: 600; }
+/* Last Light: a calm family archive.
+ * PRINT BOUNDARY: the share card sits inside .ll-app > .ll-main > .ll-hero >
+ * .ll-folio > .ll-action. Those ancestors must not set position, transform,
+ * filter, contain, font-*, line-height, letter-spacing or word-spacing, and
+ * no rule here may target elements inside .print-area. scripts/print-geometry.ts
+ * checks this. */
+
+:root {
+  --bg: #eef3f4;          /* moonlit blue paper */
+  --text: #202b3d;        /* indigo ink */
+  --surface: #fbfdfd;     /* bright paper */
+  --surface-2: #e4ecee;
+  --border: #c5d3d8;
+  --muted: #49616f;       /* slate */
+  --accent: #244d62;      /* lake blue */
+  --accent-text: #fbfdfd;
+  --lamp: #d9a44d;        /* warm lamp amber (fills and marks, not text) */
+  --ok: #2c6449;
+  --warn: #85560f;
+  --danger: #9a3b2e;
+  --info: #244d62;
+  --focus: #244d62;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+}
+
+.skip { position: absolute; left: -999px; top: 0; background: var(--surface); padding: 0.5rem 0.75rem; z-index: 2; }
+.skip:focus { left: 0.5rem; top: 0.5rem; }
+
+.ll-app { max-width: 1240px; margin: 0 auto; padding: 1.25rem 1.5rem 4rem; }
+
+.ll-top { display: flex; flex-wrap: wrap; gap: 0.75rem 1.5rem; align-items: center; justify-content: space-between; }
+.ll-brand { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 0.9rem; }
+.ll-wordmark { font-family: var(--serif); font-size: 1.7rem; letter-spacing: 0.01em; color: var(--text); }
+.ll-tagline { color: var(--muted); font-size: 0.9rem; }
+.ll-demo { margin: 0.8rem 0 1.6rem; padding: 0.45rem 0.75rem; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); color: var(--muted); }
+
+/* Asymmetric hero: folio (letter) on the left, lantern and ledger on the right. */
+.ll-hero { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: 2.25rem; align-items: start; }
+.ll-folio {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 6px solid var(--accent);
+  border-radius: 4px 14px 14px 4px;
+  padding: 1.75rem 2rem 1.5rem;
+  box-shadow: 0 1px 0 #d5e0e3, 0 12px 28px -18px rgba(32, 43, 61, 0.35);
+  background-image: repeating-linear-gradient(to bottom, transparent 0 31px, rgba(36, 77, 98, 0.06) 31px 32px);
+}
+.ll-kicker { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.14em; color: var(--muted); margin: 0 0 0.4rem; }
+.ll-folio h1 { font-family: var(--serif); font-weight: 600; font-size: clamp(1.7rem, 3.2vw, 2.4rem); line-height: 1.15; margin-bottom: 0.6rem; }
+.ll-lede { font-family: var(--serif); font-size: 1.15rem; line-height: 1.5; max-width: 40rem; }
+.ll-state { margin: 0 0 0.4rem; }
+.ll-state-chip { color: var(--accent); font-size: 0.82rem; }
+.ll-latest { color: var(--text); border-top: 1px dashed var(--border); padding-top: 0.5rem; }
+.ll-action { margin-top: 1.25rem; padding-top: 1.1rem; border-top: 1px solid var(--border); }
+.ll-subtitle { font-family: var(--serif); font-weight: 600; font-size: 1.3rem; }
+.ll-due { display: flex; flex-direction: column; margin: 0 0 0.6rem; }
+.ll-due time { font-family: var(--serif); font-size: 1.8rem; line-height: 1.1; }
+.ll-card-actions { margin-top: 0.75rem; }
+.ll-recovery-status { margin: 0 0 0.6rem; }
+.ll-sub { background: var(--surface-2); border-radius: 10px; padding: 0.9rem 1rem; margin: 0.6rem 0; }
+.ll-sub h3 { font-family: var(--serif); font-size: 1.05rem; }
+.ll-typed { margin-top: 0.75rem; }
+.ll-tech { margin-top: 0.75rem; color: var(--muted); }
+.ll-tech summary { cursor: pointer; }
+.ll-opened { margin-top: 1rem; }
+.ll-opened-letter { background: var(--bg); border-radius: 10px; padding: 0.8rem 1rem; }
+.ll-opened-letter h3 { font-family: var(--serif); font-size: 1.1rem; }
+.ll-letter-body { font-family: var(--serif); font-size: 1rem; background: var(--surface); border-color: var(--lamp); }
+
+.ll-lamp { display: flex; flex-direction: column; align-items: center; gap: 1rem; padding-top: 0.5rem; }
+.lantern { width: 168px; height: auto; }
+.sealed-letter { width: min(320px, 100%); height: auto; margin-top: 2rem; }
+.lantern-flicker .flame { animation: ll-flicker 1.6s ease-in-out infinite; }
+@keyframes ll-flicker { 0%, 100% { opacity: 1; } 40% { opacity: 0.55; } 60% { opacity: 0.85; } }
+
+.ll-stages { list-style: none; margin: 0; padding: 0; width: 100%; max-width: 20rem; border-left: 2px solid var(--border); }
+.ll-stages li { display: flex; justify-content: space-between; gap: 0.75rem; padding: 0.3rem 0 0.3rem 0.9rem; color: var(--muted); font-size: 0.88rem; }
+.ll-stages li.current { color: var(--text); font-weight: 650; border-left: 4px solid var(--lamp); margin-left: -3px; padding-left: 0.85rem; }
+.ll-stages .name { font-family: var(--serif); font-size: 1rem; }
+
+.ll-quorum { width: 100%; max-width: 20rem; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 0.75rem 0.9rem; }
+.ll-quorum ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem 0.75rem; }
+.ll-quorum li { display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; }
+.ll-quorum .dot { width: 0.7rem; height: 0.7rem; border-radius: 50%; border: 2px solid var(--muted); flex: none; }
+.ll-quorum li.in .dot { background: var(--lamp); border-color: var(--text); }
+
+.ll-section-title { font-family: var(--serif); font-weight: 600; font-size: 1.35rem; margin: 2.25rem 0 0.75rem; }
+.ll-letters { max-width: 52rem; }
+.ll-letter-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border); }
+.ll-letter { display: grid; grid-template-columns: 1.6rem minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); gap: 0.25rem 1rem; align-items: baseline;
+  padding: 0.75rem 0.25rem; border-bottom: 1px solid var(--border); }
+.ll-letter .seal { width: 0.9rem; height: 0.9rem; border-radius: 50%; background: var(--lamp); border: 2px solid var(--text); align-self: center; }
+.ll-letter .title { font-family: var(--serif); font-size: 1.08rem; }
+.ll-letter .to, .ll-letter .when { color: var(--muted); }
+.ll-add { margin-top: 1rem; }
+.ll-footnote { max-width: 52rem; margin-top: 1.5rem; }
+
+.ll-proof { margin-top: 2.5rem; border-top: 1px solid var(--border); }
+.ll-proof-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.9rem; align-items: start; }
+.ll-proof h3 { font-family: var(--serif); font-size: 1.05rem; }
+.ll-cmd { background: var(--surface-2); padding: 0.5rem 0.7rem; border-radius: 6px; white-space: pre-wrap; }
+
+@media (max-width: 900px) {
+  .ll-hero { grid-template-columns: 1fr; gap: 1.25rem; }
+  .ll-lamp { flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: flex-start; }
+  .lantern { width: 120px; }
+  .ll-proof-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .ll-app { padding: 1rem 0.9rem 3rem; }
+  .ll-folio { padding: 1.25rem 1.1rem; }
+  .ll-letter { grid-template-columns: 1.4rem minmax(0, 1fr); }
+  .ll-letter .to, .ll-letter .when { grid-column: 2; }
+  .ll-stages, .ll-quorum { max-width: none; }
+}

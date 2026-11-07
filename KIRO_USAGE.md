@@ -27,6 +27,10 @@ Only what was actually used is listed. Each entry points to a committed artifact
 - Kiro CLI (local session): the run that created commit 6136333 (spec decisions, AG gate docs and scripts, first envelope slice), as reported by the owner.
 - Kiro in Kiro Crew (local session): runs 1, 3 and 4, which drafted the spec, built the code after 6136333 and closed the review pass.
 
+## UI redesign (run 6)
+
+- Kiro redesigned both apps from design notes the owner supplied via Codex: an artifact-led hero, one permitted next action per role, and outcomes first with evidence on demand. Evidence: `scripts/print-geometry.ts` (printed card unchanged), `scripts/screenshots.ts` and `docs/screenshots/`, and the run 6 entry of the `tasks.md` progress log.
+
 ## Steering
 
 - `.kiro/steering/guarantees.md` (owner-written, `inclusion: always`) shaped the design and the app copy: retrieval-window wording, "a missed check-in is a signal, not proof of death", routing labels, online-only earliest dates, and the offline-recovery statement on the Last Light screen and in `README.md`.

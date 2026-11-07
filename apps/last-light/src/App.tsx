@@ -1,4 +1,4 @@
-// Last Light: a personal vault handed over when the owner stops checking in
+// Last Light: a family archive handed over when the owner stops checking in
 // and enough trustees act together.
 
 import { useCallback, useEffect, useState } from "react";
@@ -21,21 +21,64 @@ import {
   type CardContent,
   type VaultStatus,
 } from "@coven/ui-kit/lastlight.ts";
-import { Badge, clock, ErrorLine, MailViewer, personaName, RecordVerifier, Shell, useAction, usePersonas } from "@coven/ui-kit/components.tsx";
+import {
+  clock,
+  CovenMark,
+  DemoClock,
+  ErrorLine,
+  MailViewer,
+  personaName,
+  RecordVerifier,
+  RoleSwitch,
+  useAction,
+  useLatestRecord,
+  usePersonas,
+  utc,
+  utcDate,
+} from "@coven/ui-kit/components.tsx";
 import type { Persona } from "@coven/ui-kit/common.ts";
 import { RecoveryIncompleteError, type OpenedRecovery } from "@coven/core-ts/release";
-import type { Receipt } from "@coven/core-ts/records";
+import type { Receipt, RecordEntry } from "@coven/core-ts/records";
+import { Lantern, SealedLetter } from "./Lantern.tsx";
 
 const api = new Api({ app: "last-light" });
 const ks = new IndexedDbKeyStore("coven-last-light");
 
-const LANTERN: Record<VaultStatus["state"], { icon: string; tone: "ok" | "warn" | "danger" | "info" | "accent"; text: string }> = {
-  Lit: { icon: "🏮", tone: "ok", text: "Lit. The owner checked in on time." },
-  Flicker: { icon: "🕯️", tone: "warn", text: "Flickering. A check-in was missed; the owner has been reminded." },
-  Vigil: { icon: "🌘", tone: "warn", text: "Vigil. The grace period is running. A check-in now cancels the handover." },
-  Handover: { icon: "🌑", tone: "danger", text: "Handover. The vigil ended and trustees were told. A check-in still cancels it until release." },
-  Released: { icon: "📜", tone: "info", text: "Released. The service sent the encrypted package to the recovering trustee. The vault key is rebuilt and checked in that trustee's browser." },
+type State = VaultStatus["state"];
+
+const STATE_LINE: Record<State, string> = {
+  Lit: "The lantern is lit. The owner checked in on time.",
+  Flicker: "The lantern is flickering. A check-in was missed, and the owner has been reminded.",
+  Vigil: "The vigil is running. A check-in now still cancels the handover.",
+  Handover: "Handover has started. The vigil ended and the trustees were told. A check-in still cancels it until release.",
+  Released:
+    "Released. The service sent the encrypted package to the recovering trustee. The vault key is rebuilt and checked in that trustee's browser.",
 };
+
+const STAGES: State[] = ["Lit", "Flicker", "Vigil", "Handover", "Released"];
+
+const EVENT: Record<string, string> = {
+  "vault.created": "The vault was created",
+  "item.sealed": "A letter was sealed",
+  "card.issued": "A trustee opened their share card",
+  checkin: "The owner checked in",
+  "lantern.flicker": "The lantern began to flicker",
+  "lantern.vigil": "The vigil began",
+  "lantern.handover": "Handover started",
+  "recovery.opened": "A trustee opened a recovery",
+  "recovery.share_submitted": "A trustee submitted a share",
+  "lantern.released": "The encrypted package was sent to the recovering trustee",
+  "bundle.exported": "An offline bundle was exported",
+};
+
+function LatestLine({ entry }: { entry: RecordEntry | null }) {
+  if (!entry) return null;
+  return (
+    <p className="ll-latest small">
+      <span className="muted">Last recorded</span> {EVENT[entry.type] ?? entry.type} · <time className="tnum">{utc(entry.at, false)}</time>
+    </p>
+  );
+}
 
 export function App() {
   const { personas, me, switchTo } = usePersonas(api, "last-light", OWNER);
@@ -49,35 +92,58 @@ export function App() {
   }, [me, tick]);
 
   const v = vaults?.[0];
+  const latest = useLatestRecord(api, v ? `ll:${v.vault_id}` : null, `${tick}-${me}-${v?.receipt.length}`);
   return (
-    <Shell
-      api={api}
-      ks={ks}
-      title="🏮 Last Light"
-      tagline="Hand your vault to the people you trust, when they need it and enough of them agree."
-      personas={personas}
-      me={me}
-      onPersona={switchTo}
-      serverNow={v?.server_now ?? null}
-      onChanged={refresh}
-      clockSteps={[clock.days(7), clock.days(30)]}
-    >
-      <div className="grid">
-        <main>
-          {vaults && vaults.length === 0 && me === OWNER && <Setup />}
-          {vaults && vaults.length === 0 && me !== OWNER && (
-            <section className="card">
-              <p>No vault yet. Switch to Mara Hollow (vault owner) to set up the demo.</p>
-            </section>
-          )}
-          {v && me && <VaultView v={v} me={me} personas={personas} onChanged={refresh} />}
-        </main>
-        <aside>
-          {me && <MailViewer api={api} refreshKey={`${me}-${tick}`} />}
-          {v && <RecordVerifier api={api} chain={`ll:${v.vault_id}`} current={v.receipt} />}
-        </aside>
+    <div className="ll-app">
+      <a className="skip" href="#main">Skip to content</a>
+      <header className="ll-top">
+        <div className="ll-brand">
+          <CovenMark />
+          <span className="ll-wordmark">Last Light</span>
+          <span className="ll-tagline">A family archive, opened together when it is needed.</span>
+        </div>
+        <RoleSwitch personas={personas} me={me} onPersona={switchTo} />
+      </header>
+      <div className="ll-demo">
+        <DemoClock api={api} ks={ks} serverNow={v?.server_now ?? null} steps={[clock.days(7), clock.days(30)]} onChanged={refresh} />
       </div>
-    </Shell>
+
+      <main id="main" className="ll-main">
+        {vaults && vaults.length === 0 && me === OWNER && <Setup />}
+        {vaults && vaults.length === 0 && me !== OWNER && (
+          <section className="ll-folio">
+            <p>No vault yet. Switch to Mara Hollow (vault owner) to set up the demo.</p>
+          </section>
+        )}
+        {v && me && <VaultView v={v} me={me} personas={personas} latest={latest} onChanged={refresh} />}
+      </main>
+
+      {v && me && (
+        <aside className="ll-proof" aria-labelledby="proof-h">
+          <h2 id="proof-h" className="ll-section-title">Proof, mail and offline copy</h2>
+          <div className="ll-proof-grid">
+            <details className="evidence">
+              <summary>Offline bundle</summary>
+              <div className="body">
+                <BundlePanel v={v} />
+              </div>
+            </details>
+            <details className="evidence">
+              <summary>Record and receipts</summary>
+              <div className="body">
+                <RecordVerifier api={api} chain={`ll:${v.vault_id}`} current={v.receipt} />
+              </div>
+            </details>
+            <details className="evidence">
+              <summary>Demo mail</summary>
+              <div className="body">
+                <MailViewer api={api} refreshKey={`${me}-${tick}`} />
+              </div>
+            </details>
+          </div>
+        </aside>
+      )}
+    </div>
   );
 }
 
@@ -85,86 +151,155 @@ function Setup() {
   const [log, setLog] = useState<string[]>([]);
   const { busy, error, run } = useAction();
   return (
-    <section className="card" aria-labelledby="setup-h">
-      <h2 id="setup-h">Set up the fictional family</h2>
-      <p>
-        This creates key pairs in this browser for Mara and her five trustees, then Mara's browser creates a vault key, splits it 3 of 5,
-        and seals three letters. Check-ins are due every 30 days, with a 14-day vigil.
-      </p>
-      <button className="primary" disabled={busy} onClick={() => run(async () => { await setupDemo(api, ks, (s) => setLog((l) => [...l, s])); window.location.reload(); })}>
-        Set up demo
-      </button>
-      <ErrorLine error={error} />
-      {log.length > 0 && <pre className="small muted">{log.join("\n")}</pre>}
+    <section className="ll-hero" aria-labelledby="setup-h">
+      <div className="ll-folio">
+        <p className="ll-kicker">Folio · first evening</p>
+        <h1 id="setup-h">Set up the fictional family</h1>
+        <p className="ll-lede">
+          Mara Hollow keeps letters for her family. Five trustees each hold one piece of the key; any three can open the vault together.
+        </p>
+        <p className="small muted">
+          This creates key pairs in this browser for Mara and her five trustees. Mara's browser then makes a vault key, splits it 3 of 5 and
+          seals three letters. Check-ins are due every 30 days, with a 14-day vigil.
+        </p>
+        <button
+          className="primary"
+          disabled={busy}
+          onClick={() => run(async () => { await setupDemo(api, ks, (s) => setLog((l) => [...l, s])); window.location.reload(); })}
+        >
+          Set up demo
+        </button>
+        <ErrorLine error={error} />
+        {log.length > 0 && <pre className="small muted">{log.join("\n")}</pre>}
+      </div>
+      <div className="ll-lamp">
+        <SealedLetter />
+      </div>
     </section>
   );
 }
 
-function VaultView({ v, me, personas, onChanged }: { v: VaultStatus; me: string; personas: Persona[]; onChanged: () => void }) {
-  const l = LANTERN[v.state];
+function StageLedger({ v }: { v: VaultStatus }) {
+  const when: Record<State, string> = {
+    Lit: `until ${utcDate(v.next_due_at)}`,
+    Flicker: `from ${utcDate(v.next_due_at)}`,
+    Vigil: `from ${utcDate(v.vigil_starts_at)}`,
+    Handover: `from ${utcDate(v.handover_at)}`,
+    Released: "when a quorum's package is sent",
+  };
+  return (
+    <ol className="ll-stages" aria-label="Lifecycle">
+      {STAGES.map((s) => (
+        <li key={s} aria-current={s === v.state ? "step" : undefined} className={s === v.state ? "current" : ""}>
+          <span className="name">{s}</span> <span className="when tnum">{when[s]}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function VaultView(props: { v: VaultStatus; me: string; personas: Persona[]; latest: RecordEntry | null; onChanged: () => void }) {
+  const { v, me, personas, latest, onChanged } = props;
   const { busy, error, run } = useAction();
   const isOwner = me === v.owner_id;
   const isTrustee = v.trustee_ids.includes(me);
+  const recoveryLive = v.state === "Handover" || v.state === "Released";
+
   return (
     <>
-      <section className="card" aria-labelledby="vault-h">
-        <div className="spread">
-          <h2 id="vault-h">
-            {l.icon} {v.name}
-          </h2>
-          <Badge tone={l.tone}>{v.state}</Badge>
+      <section className="ll-hero" aria-labelledby="vault-h">
+        <div className="ll-folio">
+          <p className="ll-kicker">{isOwner ? "Your vault" : `Trustee folio · ${personaName(personas, me)}`}</p>
+          <h1 id="vault-h">{v.name}</h1>
+          <p className="ll-state">
+            <span className="chip ll-state-chip" data-testid="lantern-state">{v.state}</span>
+          </p>
+          <p className="ll-lede">{STATE_LINE[v.state]}</p>
+          <LatestLine entry={latest} />
+
+          {isOwner && (
+            <div className="ll-action">
+              {v.state !== "Released" ? (
+                <>
+                  <p className="ll-due">
+                    <span className="muted small">Next check-in due</span>
+                    <time className="tnum">{utcDate(v.next_due_at)}</time>
+                  </p>
+                  <button className="primary" disabled={busy} onClick={() => run(async () => { await checkIn(api, v.vault_id); onChanged(); })}>
+                    Check in: I'm here
+                  </button>
+                  <p className="small muted">A check-in before release cancels any pending handover. Check-ins are due every {v.cadence_days} days.</p>
+                </>
+              ) : (
+                <p className="small">The package was sent, so a check-in can no longer undo the handover.</p>
+              )}
+              <ErrorLine error={error} />
+            </div>
+          )}
+
+          {isTrustee && !recoveryLive && <ShareCard v={v} me={me} personas={personas} onChanged={onChanged} lead />}
+          {isTrustee && recoveryLive && <RecoveryPanel v={v} me={me} personas={personas} onChanged={onChanged} />}
         </div>
-        <p>{l.text}</p>
-        <table>
-          <tbody>
-            <tr><th>Last check-in</th><td>{v.last_checkin_at}</td></tr>
-            <tr><th>Next check-in due</th><td>{v.next_due_at} (every {v.cadence_days} days)</td></tr>
-            <tr><th>Vigil starts</th><td>{v.vigil_starts_at}</td></tr>
-            <tr><th>Handover starts</th><td>{v.handover_at} (after a {v.vigil_days}-day vigil)</td></tr>
-            <tr><th>Trustees</th><td>Any {v.threshold} of {v.trustee_ids.map((t) => personaName(personas, t)).join(", ")}</td></tr>
-          </tbody>
-        </table>
-        {isOwner && v.state !== "Released" && (
-          <div className="row" style={{ marginTop: "0.75rem" }}>
-            <button className="primary" disabled={busy} onClick={() => run(async () => { await checkIn(api, v.vault_id); onChanged(); })}>
-              Check in: I'm here
-            </button>
-            <span className="small muted">A check-in before release cancels any pending handover.</span>
-          </div>
-        )}
-        <ErrorLine error={error} />
-        <p className="small muted">
-          A missed check-in is a signal that starts recovery. It does not mean the owner has died. Trustees who rebuild the vault key can
-          open the whole vault, and any {v.threshold} of them holding the exported bundle could do that offline at any time.
-        </p>
+
+        <div className="ll-lamp">
+          <Lantern state={v.state} />
+          <StageLedger v={v} />
+          <Quorum v={v} me={me} personas={personas} />
+        </div>
       </section>
 
-      <section className="card" aria-labelledby="items-h">
-        <h2 id="items-h">Sealed items</h2>
-        <table>
-          <thead>
-            <tr><th>Label</th><th>Deliver to</th><th>Earliest release</th></tr>
-          </thead>
-          <tbody>
-            {v.items.map((i) => (
-              <tr key={i.item_id}>
-                <td>{i.label}</td>
-                <td>{i.deliver_to.join(", ") || "—"}</td>
-                <td>{i.earliest_release ?? "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <section className="ll-letters" aria-labelledby="letters-h">
+        <h2 id="letters-h" className="ll-section-title">Sealed letters</h2>
+        <ul className="ll-letter-list">
+          {v.items.map((i) => (
+            <li key={i.item_id} className="ll-letter">
+              <span className="seal" aria-hidden="true" />
+              <span className="title">{i.label}</span>
+              <span className="to small">for {i.deliver_to.join(", ") || "anyone"}</span>
+              <span className="when small">
+                {i.earliest_release ? <>Held online until <time className="tnum">{i.earliest_release}</time></> : "Opens with the vault"}
+              </span>
+            </li>
+          ))}
+        </ul>
         <p className="small muted">
-          Names under “deliver to” are routing labels, not separate locks. Earliest release dates are enforced by the online service only.
+          Names under “for” are routing labels, not separate locks. Earliest release dates are enforced by the online service only.
         </p>
         {isOwner && v.state !== "Released" && <AddItem vaultId={v.vault_id} onChanged={onChanged} />}
       </section>
 
-      {isTrustee && <ShareCard v={v} me={me} personas={personas} onChanged={onChanged} />}
-      {isTrustee && <RecoveryPanel v={v} me={me} personas={personas} onChanged={onChanged} />}
-      <BundlePanel v={v} />
+      {isTrustee && recoveryLive && (
+        <section className="ll-letters" aria-label="Share card">
+          <ShareCard v={v} me={me} personas={personas} onChanged={onChanged} />
+        </section>
+      )}
+
+      <p className="ll-footnote small muted">
+        A missed check-in is a signal that starts recovery. It does not mean the owner has died. Trustees who rebuild the vault key can open
+        the whole vault, and any {v.threshold} of them holding the exported bundle could do that offline at any time.
+      </p>
     </>
+  );
+}
+
+function Quorum({ v, me, personas }: { v: VaultStatus; me: string; personas: Persona[] }) {
+  const submitted = v.recovery && v.recovery.state !== "Cancelled" ? v.recovery.submitted_by : [];
+  return (
+    <div className="ll-quorum">
+      <p className="small">
+        <strong>Any {v.threshold} of {v.trustee_ids.length}</strong> trustees can open this vault.
+      </p>
+      <ul aria-label="Trustees">
+        {v.trustee_ids.map((t) => (
+          <li key={t} className={submitted.includes(t) ? "in" : ""}>
+            <span className="dot" aria-hidden="true" />
+            {personaName(personas, t)}
+            {t === me && <span className="small muted"> (you)</span>}
+            {submitted.includes(t) && <span className="visually-hidden"> submitted a share</span>}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -175,48 +310,52 @@ function AddItem({ vaultId, onChanged }: { vaultId: string; onChanged: () => voi
   const [body, setBody] = useState("");
   const { busy, error, run } = useAction();
   return (
-    <details className="card sub" style={{ marginTop: "1rem" }}>
+    <details className="evidence ll-add">
       <summary>Seal a new letter</summary>
-      <div className="field"><label htmlFor="ni-label">Label</label><input id="ni-label" value={label} onChange={(e) => setLabel(e.target.value)} /></div>
-      <div className="field"><label htmlFor="ni-to">Deliver to (comma separated)</label><input id="ni-to" value={to} onChange={(e) => setTo(e.target.value)} /></div>
-      <div className="field"><label htmlFor="ni-date">Earliest release (optional, online policy)</label><input id="ni-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
-      <div className="field"><label htmlFor="ni-body">Letter (fictional)</label><textarea id="ni-body" value={body} onChange={(e) => setBody(e.target.value)} /></div>
-      <button
-        className="primary"
-        disabled={busy || !label || !body}
-        onClick={() =>
-          run(async () => {
-            await addItem(api, ks, OWNER, vaultId, {
-              label,
-              deliverTo: to.split(",").map((s) => s.trim()).filter(Boolean),
-              earliestRelease: date || null,
-              body,
-            });
-            setLabel(""); setTo(""); setDate(""); setBody("");
-            onChanged();
-          })
-        }
-      >
-        Encrypt in this browser and seal
-      </button>
-      <ErrorLine error={error} />
+      <div className="body">
+        <div className="field"><label htmlFor="ni-label">Label</label><input id="ni-label" value={label} onChange={(e) => setLabel(e.target.value)} /></div>
+        <div className="field"><label htmlFor="ni-to">Deliver to (comma separated)</label><input id="ni-to" value={to} onChange={(e) => setTo(e.target.value)} /></div>
+        <div className="field"><label htmlFor="ni-date">Earliest release (optional, online policy)</label><input id="ni-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
+        <div className="field"><label htmlFor="ni-body">Letter (fictional)</label><textarea id="ni-body" value={body} onChange={(e) => setBody(e.target.value)} /></div>
+        <button
+          className="primary"
+          disabled={busy || !label || !body}
+          onClick={() =>
+            run(async () => {
+              await addItem(api, ks, OWNER, vaultId, {
+                label,
+                deliverTo: to.split(",").map((s) => s.trim()).filter(Boolean),
+                earliestRelease: date || null,
+                body,
+              });
+              setLabel(""); setTo(""); setDate(""); setBody("");
+              onChanged();
+            })
+          }
+        >
+          Encrypt in this browser and seal
+        </button>
+        <ErrorLine error={error} />
+      </div>
     </details>
   );
 }
 
-function ShareCard({ v, me, personas, onChanged }: { v: VaultStatus; me: string; personas: Persona[]; onChanged: () => void }) {
+function ShareCard({ v, me, personas, onChanged, lead = false }: { v: VaultStatus; me: string; personas: Persona[]; onChanged: () => void; lead?: boolean }) {
   const [card, setCard] = useState<(CardContent & { svg: string; receipt: Receipt }) | null>(null);
   const { busy, error, run } = useAction();
   useEffect(() => setCard(null), [me]);
+  const Heading = lead ? "h2" : "h2";
   return (
-    <section className="card" aria-labelledby="card-h">
-      <h2 id="card-h">My share card</h2>
+    <div className="ll-action" aria-labelledby="card-h">
+      <Heading id="card-h" className="ll-subtitle">My share card</Heading>
       <p className="small">
         Your share is stored encrypted to your key. This browser decrypts it and draws the card locally. The QR code and word code never
         leave this page.
       </p>
       {!card && (
         <button
+          className={lead ? "primary" : ""}
           disabled={busy}
           onClick={() =>
             run(async () => {
@@ -246,13 +385,13 @@ function ShareCard({ v, me, personas, onChanged }: { v: VaultStatus; me: string;
               <p className="small">Receipt at issuance: <span className="mono" style={{ overflowWrap: "anywhere" }}>{card.receipt.length}:{card.receipt.head}</span></p>
             </div>
           </div>
-          <div className="row" style={{ marginTop: "0.5rem" }}>
+          <div className="row ll-card-actions">
             <button className="primary" onClick={() => window.print()}>Print card</button>
             <button onClick={() => setCard(null)}>Hide card</button>
           </div>
         </>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -269,19 +408,11 @@ function RecoveryPanel({ v, me, personas, onChanged }: { v: VaultStatus; me: str
     if (r) hasRecoveryKey(ks, r.recovery_id).then(setHaveKey);
   }, [r?.recovery_id, me]);
 
-  if (v.state !== "Handover" && v.state !== "Released") {
-    return (
-      <section className="card">
-        <h2>Recovery</h2>
-        <p className="small muted">Recovery opens only after the vigil ends. Right now the lantern is {v.state.toLowerCase()}.</p>
-      </section>
-    );
-  }
   const submitted = r?.submitted_by.includes(me);
   const isRecoverer = r?.recoverer_id === me;
   return (
-    <section className="card" aria-labelledby="recov-h">
-      <h2 id="recov-h">Recovery</h2>
+    <div className="ll-action" aria-labelledby="recov-h">
+      <h2 id="recov-h" className="ll-subtitle">Recovery</h2>
       {!r && v.state === "Handover" && (
         <>
           <p className="small">Open a recovery to receive the other trustees' shares in this browser. They are encrypted to a one-time key made here.</p>
@@ -292,23 +423,22 @@ function RecoveryPanel({ v, me, personas, onChanged }: { v: VaultStatus; me: str
       )}
       {r && (
         <>
-          <p className="small">
-            Recovery by <strong>{personaName(personas, r.recoverer_id)}</strong> · {r.state} · shares {r.submitted_by.length} of {v.threshold}
-            {r.submitted_by.length > 0 && <> ({r.submitted_by.map((t) => personaName(personas, t)).join(", ")})</>}
+          <p className="ll-recovery-status">
+            <strong>
+              Recovery by {personaName(personas, r.recoverer_id)} · {r.state} · shares {r.submitted_by.length} of {v.threshold}
+            </strong>
+            {r.submitted_by.length > 0 && <span className="small"> ({r.submitted_by.map((t) => personaName(personas, t)).join(", ")})</span>}
           </p>
-          <p className="small muted">Recoverer key fingerprint <code>{r.fingerprint.slice(0, 32).match(/.{4}/g)!.join(" ")}</code></p>
           {(r.state === "Open" || r.state === "Complete") && !submitted && (
-            <div className="card sub">
+            <div className="ll-sub">
               <h3>{r.state === "Open" ? "Submit my share" : "Add my share to this recovery"}</h3>
               {r.state === "Complete" && (
                 <p className="small muted">The package was already sent. Add your share if the recovering trustee could not use one of the others.</p>
               )}
-              <div className="row">
-                <button className="primary" disabled={busy} onClick={() => run(async () => { await submitShare(api, ks, me, v); onChanged(); })}>
-                  Use my stored share
-                </button>
-              </div>
-              <div className="field" style={{ marginTop: "0.6rem" }}>
+              <button className="primary" disabled={busy} onClick={() => run(async () => { await submitShare(api, ks, me, v); onChanged(); })}>
+                Use my stored share
+              </button>
+              <div className="field ll-typed">
                 <label htmlFor="typed">Or type the word code (or paste the QR text) from my printed card</label>
                 <input id="typed" className="mono" autoComplete="off" spellCheck={false} value={typed} onChange={(e) => setTyped(e.target.value)} />
               </div>
@@ -318,56 +448,63 @@ function RecoveryPanel({ v, me, personas, onChanged }: { v: VaultStatus; me: str
               <p className="small muted">The code is checked and encrypted in this browser. Only the encrypted envelope is sent.</p>
             </div>
           )}
-          {submitted && r.state === "Open" && <p className="small muted">You submitted your share. Submitting again does not count twice.</p>}
+          {submitted && r.state === "Open" && <p className="small">You submitted your share. Submitting again does not count twice.</p>}
           {isRecoverer && (r.state === "Open" || r.state === "Complete") && (
-            <div className="row">
-              <button
-                className="primary"
-                disabled={busy || !haveKey || r.submitted_by.length < v.threshold}
-                onClick={() =>
-                  run(async () => {
-                    setIncomplete(null);
-                    try {
-                      setOpened(await completeRecovery(api, ks, r.recovery_id));
-                    } catch (e) {
-                      if (e instanceof RecoveryIncompleteError) setIncomplete(e);
-                      else throw e;
-                    } finally {
-                      onChanged();
-                    }
-                  })
-                }
-              >
-                {r.state === "Complete" ? "Fetch the package again and retry" : "Fetch the package and rebuild the key here"}
-              </button>
-              {r.submitted_by.length < v.threshold && <span className="small muted">Waiting for {v.threshold - r.submitted_by.length} more.</span>}
-              {!haveKey && <span className="small muted">This browser does not hold the recovery key.</span>}
-            </div>
-          )}
-          {isRecoverer && r.state === "Open" && (
-            <p className="small muted">
-              Fetching the package marks the vault Released, because the service has then sent the encrypted shares. This browser checks them
-              afterwards.
-            </p>
+            <>
+              <div className="row">
+                <button
+                  className="primary"
+                  disabled={busy || !haveKey || r.submitted_by.length < v.threshold}
+                  onClick={() =>
+                    run(async () => {
+                      setIncomplete(null);
+                      try {
+                        setOpened(await completeRecovery(api, ks, r.recovery_id));
+                      } catch (e) {
+                        if (e instanceof RecoveryIncompleteError) setIncomplete(e);
+                        else throw e;
+                      } finally {
+                        onChanged();
+                      }
+                    })
+                  }
+                >
+                  {r.state === "Complete" ? "Fetch the package again and retry" : "Fetch the package and rebuild the key here"}
+                </button>
+                {r.submitted_by.length < v.threshold && <span className="small muted">Waiting for {v.threshold - r.submitted_by.length} more.</span>}
+                {!haveKey && <span className="small muted">This browser does not hold the recovery key.</span>}
+              </div>
+              {r.state === "Open" && (
+                <p className="small muted">
+                  Fetching the package marks the vault Released, because the service has then sent the encrypted shares. This browser checks them
+                  afterwards.
+                </p>
+              )}
+            </>
           )}
           {incomplete && (
             <div className="notice danger small" role="alert">
-              <strong>The vault key was not rebuilt.</strong> {incomplete.failed.length > 0 && <>The contribution from {incomplete.failed.map((t) => personaName(personas, t)).join(", ")} could not be used here. </>}
+              <strong>The vault key was not rebuilt.</strong>{" "}
+              {incomplete.failed.length > 0 && <>The contribution from {incomplete.failed.map((t) => personaName(personas, t)).join(", ")} could not be used here. </>}
               {incomplete.usable} usable of {incomplete.needed} needed. Ask another trustee to add their share to this recovery, then retry. Trustees can
               also recover offline from printed cards and the bundle.
             </div>
           )}
+          <details className="ll-tech small">
+            <summary>Recovery key fingerprint</summary>
+            <code className="wrap-anywhere">{r.fingerprint.slice(0, 32).match(/.{4}/g)!.join(" ")}</code>
+          </details>
         </>
       )}
       <ErrorLine error={error} />
       {opened && (
-        <div className="stack" style={{ marginTop: "0.75rem" }}>
-          <p className="notice ok small">
+        <div className="stack ll-opened">
+          <p className="notice ok small" role="status">
             Vault key rebuilt and verified in this browser (header check passed) from the shares of {opened.used.map((t) => personaName(personas, t)).join(", ")}.
             {opened.failed.length > 0 && <> Not used: {opened.failed.map((t) => personaName(personas, t)).join(", ")}.</>}
           </p>
           {opened.items.map((it) => (
-            <article className="card sub" key={it.itemId}>
+            <article className="ll-opened-letter" key={it.itemId}>
               <div className="spread">
                 <h3>{it.label}</h3>
                 <span className="small muted">for {it.deliverTo.join(", ") || "anyone"}</span>
@@ -375,26 +512,26 @@ function RecoveryPanel({ v, me, personas, onChanged }: { v: VaultStatus; me: str
               {it.withheld ? (
                 <p className="notice small">Held online until {it.earliestRelease}. This date is online policy only.</p>
               ) : (
-                <div className="secret">{it.body}</div>
+                <div className="secret ll-letter-body">{it.body}</div>
               )}
             </article>
           ))}
         </div>
       )}
-    </section>
+    </div>
   );
 }
 
 function BundlePanel({ v }: { v: VaultStatus }) {
   const { busy, error, run } = useAction();
   return (
-    <section className="card" aria-labelledby="bundle-h">
-      <h2 id="bundle-h">Offline bundle</h2>
+    <section aria-labelledby="bundle-h">
+      <h3 id="bundle-h">Offline bundle</h3>
       <p className="small">
         The bundle holds ciphertext and the record snapshot, no shares or keys. With it and any {v.threshold} shares, the offline tool opens
         the vault without this service:
       </p>
-      <pre className="small mono" style={{ whiteSpace: "pre-wrap" }}>node core-ts/bin/recover.js bundle.json</pre>
+      <pre className="small mono wrap-anywhere ll-cmd">node core-ts/bin/recover.js bundle.json</pre>
       <button
         disabled={busy}
         onClick={() =>

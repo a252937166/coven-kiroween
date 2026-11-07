@@ -1,7 +1,7 @@
-// Shared React components for both apps.
+// Shared React pieces for both apps. Layout and look belong to each app.
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import type { Receipt } from "@coven/core-ts/records";
+import type { Receipt, RecordEntry, ReceiptOutcome } from "@coven/core-ts/records";
 import { Api, ApiError } from "./api.ts";
 import { advanceClock, checkChain, mail, parseReceipt, resetDemo, type Mail, type Persona } from "./common.ts";
 import type { KeyStore } from "./keystore.ts";
@@ -33,8 +33,14 @@ export function useAction() {
   return { busy, error, run, setError };
 }
 
-export function Badge({ tone = "", children }: { tone?: "" | "ok" | "warn" | "danger" | "info" | "accent"; children: ReactNode }) {
+export type Tone = "" | "ok" | "warn" | "danger" | "info" | "accent" | "quiet";
+
+export function Badge({ tone = "", children }: { tone?: Tone; children: ReactNode }) {
   return <span className={`badge ${tone}`}>{children}</span>;
+}
+
+export function Chip({ tone = "quiet", children }: { tone?: Tone; children: ReactNode }) {
+  return <span className={`chip ${tone}`}>{children}</span>;
 }
 
 export function ErrorLine({ error }: { error: string | null }) {
@@ -45,82 +51,95 @@ export function ErrorLine({ error }: { error: string | null }) {
   ) : null;
 }
 
-const DAY = 86400;
-
-export interface ShellProps {
-  api: Api;
-  ks: KeyStore;
-  title: string;
-  tagline: string;
-  personas: Persona[];
-  me: string | null;
-  onPersona: (id: string) => void;
-  serverNow: string | null;
-  onChanged: () => void;
-  clockSteps: { label: string; seconds: number }[];
-  children: ReactNode;
+/** "2026-11-07 18:31:37 UTC" from an ISO string; the service clock is UTC. */
+export function utc(iso: string | null | undefined, withSeconds = true): string {
+  if (!iso) return "…";
+  const t = iso.replace("T", " ").replace("Z", "");
+  return `${withSeconds ? t : t.slice(0, 16)} UTC`;
 }
 
-/** Header with persona switcher, labelled demo clock and reset. */
-export function Shell(props: ShellProps) {
-  const { api, ks, personas, me, onPersona, serverNow, onChanged, clockSteps } = props;
-  const { busy, error, run } = useAction();
+export function utcDate(iso: string | null | undefined): string {
+  return iso ? iso.slice(0, 10) : "…";
+}
+
+/** The shared Coven mark: three overlapping rings. Original, inline, decorative. */
+export function CovenMark() {
   return (
-    <div className="shell">
-      <header className="topbar">
-        <div className="brand">
-          <strong>{props.title}</strong>
-          <span>{props.tagline}</span>
-        </div>
-        <div className="controls">
-          <label htmlFor="persona" className="small" style={{ margin: 0 }}>
-            Signed in as
-          </label>
-          <select id="persona" value={me ?? ""} onChange={(e) => onPersona(e.target.value)}>
-            {personas.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} · {p.role}
-              </option>
-            ))}
-          </select>
-        </div>
-      </header>
-      <div className="demo-banner" role="note">
-        <strong>Demo mode.</strong>
-        <span>Fictional people and data. One browser plays every persona.</span>
-        <span>
-          Demo clock: <code>{serverNow ?? "…"}</code>. It speeds up waiting only; all cryptography runs for real.
-        </span>
-        {clockSteps.map((s) => (
-          <button key={s.label} disabled={busy} onClick={() => run(async () => { await advanceClock(api, s.seconds); onChanged(); })}>
-            {s.label}
-          </button>
+    <span className="coven-mark">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <g fill="none" stroke="currentColor" strokeWidth="1.6">
+          <circle cx="12" cy="8.5" r="5" />
+          <circle cx="8.2" cy="15" r="5" />
+          <circle cx="15.8" cy="15" r="5" />
+        </g>
+      </svg>
+      Coven
+    </span>
+  );
+}
+
+/** Switches which fictional persona is signed in. Navigation only: no other side effect. */
+export function RoleSwitch({ personas, me, onPersona }: { personas: Persona[]; me: string | null; onPersona: (id: string) => void }) {
+  return (
+    <div className="role-switch">
+      <label htmlFor="persona">Signed in as</label>
+      <select id="persona" value={me ?? ""} onChange={(e) => onPersona(e.target.value)}>
+        {personas.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name} · {p.role}
+          </option>
         ))}
-        <button
-          className="danger"
-          disabled={busy}
-          onClick={() => {
-            if (window.confirm("Reset the demo? This deletes all demo data and this browser's demo keys.")) {
-              run(async () => {
-                await resetDemo(api, ks);
-                window.location.reload();
-              });
-            }
-          }}
-        >
-          Reset demo
-        </button>
-        <ErrorLine error={error} />
-      </div>
-      {props.children}
+      </select>
     </div>
   );
 }
+
+const DAY = 86400;
 
 export const clock = {
   minutes: (n: number) => ({ label: `+${n} min`, seconds: n * 60 }),
   days: (n: number) => ({ label: `+${n} days`, seconds: n * DAY }),
 };
+
+/** Compact, clearly fictional demo controls. Moving the clock is a deliberate click. */
+export function DemoClock(props: {
+  api: Api;
+  ks: KeyStore;
+  serverNow: string | null;
+  steps: { label: string; seconds: number }[];
+  onChanged: () => void;
+}) {
+  const { busy, error, run } = useAction();
+  return (
+    <div className="demo-strip" role="group" aria-label="Demo controls">
+      <span className="tag">Fictional demo</span>
+      <span>
+        Service clock <time className="tnum">{utc(props.serverNow, false)}</time>
+      </span>
+      {props.steps.map((s) => (
+        <button key={s.label} disabled={busy} onClick={() => run(async () => { await advanceClock(props.api, s.seconds); props.onChanged(); })}>
+          {s.label}
+        </button>
+      ))}
+      <button
+        className="danger"
+        disabled={busy}
+        onClick={() => {
+          if (window.confirm("Reset the demo? This deletes all demo data and this browser's demo keys.")) {
+            run(async () => {
+              await resetDemo(props.api, props.ks);
+              window.location.reload();
+            });
+          }
+        }}
+      >
+        Reset demo
+      </button>
+      <span className="visually-hidden">The demo clock speeds up waiting only; all cryptography runs for real.</span>
+      <ErrorLine error={error} />
+    </div>
+  );
+}
 
 export function MailViewer({ api, refreshKey }: { api: Api; refreshKey: unknown }) {
   const [items, setItems] = useState<Mail[]>([]);
@@ -129,8 +148,8 @@ export function MailViewer({ api, refreshKey }: { api: Api; refreshKey: unknown 
     mail(api).then(setItems, (e) => setErr(errorText(e)));
   }, [api, refreshKey]);
   return (
-    <section className="card" aria-labelledby="mail-h">
-      <h2 id="mail-h">Demo mail</h2>
+    <section aria-labelledby="mail-h">
+      <h3 id="mail-h">Demo mail</h3>
       <p className="small muted">Notifications for the signed-in persona. No real email is sent.</p>
       <ErrorLine error={err} />
       {items.length === 0 && <p className="muted small">No messages.</p>}
@@ -138,31 +157,41 @@ export function MailViewer({ api, refreshKey }: { api: Api; refreshKey: unknown 
         <div className="mail-item" key={m.id}>
           <div className="spread">
             <strong className="small">{m.subject}</strong>
-            <span className="small muted">{m.at}</span>
+            <span className="small muted tnum">{utc(m.at, false)}</span>
           </div>
-          <div className="small" style={{ overflowWrap: "anywhere" }}>{m.body}</div>
+          <div className="small wrap-anywhere">{m.body}</div>
         </div>
       ))}
     </section>
   );
 }
 
-/** Verify the service's record against a receipt the user kept. */
+const OUTCOME: Record<ReceiptOutcome, { title: string; text: (n: number) => string }> = {
+  consistent: {
+    title: "Consistent",
+    text: (n) => `The first ${n} entries still hash to this receipt.`,
+  },
+  altered: {
+    title: "Witnessed prefix altered",
+    text: (n) => `One or more of the first ${n} entries were changed, removed or reordered. A receipt alone cannot say which.`,
+  },
+  truncated: {
+    title: "Truncated",
+    text: (n) => `The record now holds fewer than the ${n} entries this receipt witnessed.`,
+  },
+};
+
+/** Verify the service's record against a receipt the user kept. Runs in the browser. */
 export function RecordVerifier({ api, chain, current }: { api: Api; chain: string; current: Receipt | null }) {
   const [text, setText] = useState("");
-  const [result, setResult] = useState<string | null>(null);
+  const [result, setResult] = useState<{ outcome: ReceiptOutcome; n: number; length: number } | null>(null);
   const { busy, error, run } = useAction();
-  const outcomes: Record<string, string> = {
-    consistent: "Consistent: the witnessed prefix matches the receipt.",
-    altered: "Witnessed prefix altered: one or more entries up to that point changed, were removed or were reordered. A receipt alone cannot say which.",
-    truncated: "Truncated: the record is shorter than the receipt.",
-  };
   return (
-    <section className="card" aria-labelledby="rec-h">
-      <h2 id="rec-h">Record and receipts</h2>
+    <section aria-labelledby="rec-h">
+      <h3 id="rec-h">Record and receipts</h3>
       {current && (
         <p className="small">
-          Current receipt: <code style={{ overflowWrap: "anywhere" }}>{`${current.length}:${current.head}`}</code>
+          Current receipt: <code className="wrap-anywhere">{`${current.length}:${current.head}`}</code>
         </p>
       )}
       <div className="field">
@@ -173,20 +202,40 @@ export function RecordVerifier({ api, chain, current }: { api: Api; chain: strin
         disabled={busy || !text}
         onClick={() =>
           run(async () => {
-            const r = await checkChain(api, chain, parseReceipt(text));
-            setResult(`${outcomes[r.outcome]} The service now holds ${r.length} entries.`);
+            const receipt = parseReceipt(text);
+            const r = await checkChain(api, chain, receipt);
+            setResult({ outcome: r.outcome, n: receipt.length, length: r.length });
           })
         }
       >
         Verify in this browser
       </button>
       <ErrorLine error={error} />
-      {result && <p className="notice ok small">{result}</p>}
+      {result && (
+        <div className={`outcome ${result.outcome}`} role="status">
+          <strong>{OUTCOME[result.outcome].title}</strong>
+          <span>
+            {OUTCOME[result.outcome].text(result.n)} The service now holds {result.length} entries.
+          </span>
+        </div>
+      )}
       <p className="small muted">
         A receipt checks the prefix it witnessed. Finding which entry changed needs a retained copy, such as the snapshot in an exported bundle.
       </p>
     </section>
   );
+}
+
+/** The newest record entry, for a "what just happened" line. */
+export function useLatestRecord(api: Api, chain: string | null, refreshKey: unknown) {
+  const [entry, setEntry] = useState<RecordEntry | null>(null);
+  useEffect(() => {
+    if (!chain) return;
+    api
+      .get<{ entries: RecordEntry[] }>(`/api/records/${encodeURIComponent(chain)}`)
+      .then((r) => setEntry(r.entries[r.entries.length - 1] ?? null), () => setEntry(null));
+  }, [api, chain, refreshKey]);
+  return entry;
 }
 
 /** Load personas for this app and keep a signed-in session. */
@@ -218,4 +267,8 @@ export function usePersonas(api: Api, app: string, fallback: string) {
 
 export function personaName(personas: Persona[], id: string) {
   return personas.find((p) => p.id === id)?.name ?? id.replace(/^user:/, "");
+}
+
+export function personaRole(personas: Persona[], id: string) {
+  return personas.find((p) => p.id === id)?.role ?? "";
 }

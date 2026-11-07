@@ -38,6 +38,7 @@ async function fetchRelease(page: Page, pid: string) {
 
 async function openAndApprove(page: Page, item: string, reason: string) {
   await signInAs(page, "Robin");
+  await page.getByRole("button", { name: "New petition" }).click();
   await page.getByLabel("Item", { exact: true }).selectOption({ label: item });
   await page.getByLabel("Retrieval window").selectOption("15");
   await page.getByLabel("Reason").fill(reason);
@@ -46,7 +47,7 @@ async function openAndApprove(page: Page, item: string, reason: string) {
   const link = (await card.getByRole("link", { name: "Petition link" }).getAttribute("href"))!;
   for (const who of ["Ash", "Wren"]) {
     await signInAs(page, who);
-    await page.getByRole("article").filter({ hasText: reason }).getByRole("button", { name: /Approve/ }).click();
+    await page.getByRole("article").filter({ hasText: reason }).getByRole("button", { name: /^Approve:/ }).click();
     await expect(page.getByRole("article").filter({ hasText: reason }).getByText(/You approved|Approved/).first()).toBeVisible();
   }
   const pid = /#petition=([0-9a-f-]{36})$/.exec(link)![1];
@@ -71,13 +72,14 @@ test("Break Glass: quorum, duplicate approval, single-item release, rotation", a
   await expect(page.getByRole("heading", { name: "Sealed items" })).toBeVisible({ timeout: 30_000 });
 
   await signInAs(page, "Robin");
+  await page.getByRole("button", { name: "New petition" }).click();
   await page.getByLabel("Reason").fill("Production database locked out (fictional)");
   await page.getByRole("button", { name: "Open petition" }).click();
   await expect(page.getByText("Waiting for approvals. Nothing is released before quorum.")).toBeVisible();
   await expect(page.getByRole("button", { name: /Retrieve/ })).toHaveCount(0);
 
   await signInAs(page, "Sage");
-  await page.getByRole("button", { name: /Approve/ }).click();
+  await page.getByRole("button", { name: /^Approve:/ }).click();
   await expect(page.getByText("You approved. Another approval from you does not count.")).toBeVisible();
   await expect(page.getByText("Approvals 1 of 2 needed")).toBeVisible();
 
@@ -85,8 +87,8 @@ test("Break Glass: quorum, duplicate approval, single-item release, rotation", a
   await expect(page.getByRole("button", { name: /Retrieve/ })).toHaveCount(0);
 
   await signInAs(page, "Rowan");
-  await page.getByRole("button", { name: /Approve/ }).click();
-  await expect(page.locator(".badge", { hasText: "Approved" })).toBeVisible();
+  await page.getByRole("button", { name: /^Approve:/ }).click();
+  await expect(page.getByRole("region", { name: "Selected petition" }).getByTestId("petition-state")).toHaveText("Approved");
 
   await signInAs(page, "Kit");
   await expect(page.getByText("No petitions visible to Kit.")).toBeVisible();
@@ -98,7 +100,7 @@ test("Break Glass: quorum, duplicate approval, single-item release, rotation", a
   await expect(page.getByText("Rotation required.")).toBeVisible();
   await page.screenshot({ path: join(dir, "break-glass-released.png"), fullPage: true });
   await page.getByRole("button", { name: "I rotated it in the issuing system" }).click();
-  await expect(page.locator(".badge", { hasText: "rotated" })).toBeVisible();
+  await expect(page.getByTestId("rotation-aws-root")).toHaveText("rotated");
 
   // The plaintext never travelled to the service.
   for (const r of requests) expect(r).not.toContain("Pumpkin-Lantern-4417");
@@ -119,7 +121,7 @@ test("Break Glass scenario 3: a reused petition link works in the window and is 
   await signInAs(page, "Robin");
   await page.goto(a.link);
   const linkCard = page.getByRole("region", { name: "Petition link" });
-  await expect(linkCard.locator(".badge", { hasText: "Approved" })).toBeVisible();
+  await expect(linkCard.getByTestId("petition-state")).toHaveText("Approved");
   await linkCard.getByRole("button", { name: "Retrieve and decrypt in this browser" }).click();
   await expect(page.locator(".secret")).toHaveText(/8F2K-QX7M/);
   await expect(page.getByText("Anything you already copied or downloaded stays usable after that.").first()).toBeVisible();
@@ -144,7 +146,7 @@ test("Break Glass scenario 3: a reused petition link works in the window and is 
   await signInAs(page, "Robin");
   await page.goto(b.link);
   await page.getByRole("button", { name: "+30 min" }).click();
-  await expect(linkCard.locator(".badge", { hasText: "Expired" })).toBeVisible();
+  await expect(linkCard.getByTestId("petition-state")).toHaveText("Expired");
   await expect(linkCard.getByText(/This link stopped working at/)).toBeVisible();
   await expect(linkCard.getByText("Anything you already copied or downloaded stays usable after that.")).toBeVisible();
 
@@ -195,12 +197,12 @@ test("Last Light: cards, check-in cancels, recovery with a typed code, offline C
   await signInAs(page, "Mara Hollow");
   await page.getByRole("button", { name: "+30 days" }).click();
   await page.getByRole("button", { name: "+7 days" }).click();
-  await expect(page.locator(".badge", { hasText: "Vigil" })).toBeVisible();
+  await expect(page.getByTestId("lantern-state")).toHaveText("Vigil");
   await page.getByRole("button", { name: "Check in: I'm here" }).click();
-  await expect(page.locator(".badge", { hasText: "Lit" })).toBeVisible();
+  await expect(page.getByTestId("lantern-state")).toHaveText("Lit");
   await page.getByRole("button", { name: "+30 days" }).click();
   await page.getByRole("button", { name: "+30 days" }).click();
-  await expect(page.locator(".badge", { hasText: "Handover" })).toBeVisible();
+  await expect(page.getByTestId("lantern-state")).toHaveText("Handover");
 
   await signInAs(page, "Ada");
   await page.getByRole("button", { name: /Open a recovery/ }).click();
@@ -221,10 +223,11 @@ test("Last Light: cards, check-in cancels, recovery with a typed code, offline C
   await page.getByRole("button", { name: "Fetch the package and rebuild the key here" }).click();
   await expect(page.getByText(/Vault key rebuilt and verified in this browser \(header check passed\)/)).toBeVisible();
   await expect(page.locator(".secret").first()).toContainText("blue pumpkin");
-  await expect(page.getByText(/Held online until 2031-06-01/)).toBeVisible();
-  await expect(page.locator(".badge", { hasText: "Released" })).toBeVisible();
+  await expect(page.locator(".ll-opened").getByText(/Held online until 2031-06-01/)).toBeVisible();
+  await expect(page.getByTestId("lantern-state")).toHaveText("Released");
   await page.screenshot({ path: join(dir, "last-light-released.png"), fullPage: true });
 
+  await page.locator("summary", { hasText: "Offline bundle" }).click();
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download bundle" }).click();
   const bundlePath = join(dir, "bundle.json");
