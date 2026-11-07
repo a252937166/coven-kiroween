@@ -6,7 +6,7 @@ import { fromBase64, toBase64 } from "@coven/core-ts/bytes";
 import { openTrusteeShare, sealRecoveryShare, sealTrusteeShare } from "@coven/core-ts/envelope";
 import { exportRawPublicKey, generateEphemeralKeyPair } from "@coven/core-ts/keys";
 import type { Receipt } from "@coven/core-ts/records";
-import { openRecovery, type LocalRecovery, type OpenedVaultItem, type RecoveryPackage } from "@coven/core-ts/release";
+import { openRecovery, type LocalRecovery, type OpenedRecovery, type RecoveryPackage } from "@coven/core-ts/release";
 import { decodeShareFor, encodeQrPayload, encodeWordCode, shareTag } from "@coven/core-ts/shares";
 import { sealVaultItem, sealVaultKey } from "@coven/core-ts/vault";
 import type { Api } from "./api.ts";
@@ -207,7 +207,8 @@ export async function beginRecovery(api: Api, ks: KeyStore, me: string, vaultId:
  */
 export async function submitShare(api: Api, ks: KeyStore, me: string, status: VaultStatus, printedText?: string) {
   const r = status.recovery;
-  if (!r || r.state !== "Open") throw new FlowError("no open recovery");
+  // "Complete" means the package was served; trustees may still add a share.
+  if (!r || (r.state !== "Open" && r.state !== "Complete")) throw new FlowError("no open recovery");
   const { raw } = await checkedFingerprint(r.public_key, r.fingerprint);
   const share = printedText ? await decodeShareFor(printedText, status.vault_id) : await myShare(api, ks, me, status.vault_id);
   try {
@@ -227,13 +228,20 @@ export async function hasRecoveryKey(ks: KeyStore, rid: string) {
   return (await ks.get(`recovery:${rid}`)) !== undefined;
 }
 
-/** Recovering trustee: rebuild the vault key here and open the released items. */
-export async function completeRecovery(api: Api, ks: KeyStore, rid: string): Promise<{ items: OpenedVaultItem[]; receipt: Receipt }> {
+/**
+ * Recovering trustee: fetch the encrypted package, then rebuild and verify the
+ * vault key here. The service marks the vault Released when it serves the
+ * package, before this browser has verified anything. If a contribution does
+ * not decrypt, openRecovery throws RecoveryIncompleteError naming it; another
+ * trustee can add a share to the same recovery and this can be called again.
+ * The recovery key stays in this browser for that retry.
+ */
+export async function completeRecovery(api: Api, ks: KeyStore, rid: string): Promise<OpenedRecovery & { receipt: Receipt }> {
   const local = await ks.get<LocalRecovery>(`recovery:${rid}`);
   if (!local) throw new FlowError("this browser does not hold the key for this recovery");
   const pkg = await api.get<RecoveryPackage & { receipt: Receipt }>(`/api/ll/recoveries/${rid}/package`);
-  const items = await openRecovery(local, pkg);
-  return { items, receipt: pkg.receipt };
+  const opened = await openRecovery(local, pkg);
+  return { ...opened, receipt: pkg.receipt };
 }
 
 export function bundle(api: Api, vaultId: string) {

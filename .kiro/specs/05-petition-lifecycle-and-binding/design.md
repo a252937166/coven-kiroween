@@ -113,7 +113,7 @@ The service:
 The requester's browser:
 
 - Generates the key pair with `crypto.subtle.generateKey({name: "ECDH", namedCurve: "P-256"}, false, ["deriveBits"])`. The private key is non-extractable.
-- Stores the `CryptoKey` in IndexedDB keyed by `petition_id`, and deletes it after a successful local decryption or once the petition is terminal.
+- Stores the `CryptoKey` in IndexedDB keyed by `petition_id`, and deletes it after a successful local decryption or once the petition is terminal. The petition opened from a petition link keeps its key until the service itself answers 410 to a retrieval, so a reused link is refused by the service, not hidden by the client (run 4).
 - Shows the fingerprint it computed itself as the key label.
 
 ### 3. Approval (BG-03.2, BG-03.3, BG-01.4)
@@ -184,7 +184,7 @@ Approver share blobs (section 1) use the same construction with a different doma
 
 ### 5. Release decision (BG-01.1, BG-01.2, BG-01.3)
 
-There is exactly one requester-facing path to release material: `GET /petitions/{id}/release`. No other endpoint returns item ciphertext, the item header or approval envelopes to a requester, and none of them is placed at a static or blob URL. A "retrieval link" is the petition's page URL. It carries no token, so it grants nothing beyond what the authenticated session already allows.
+There is exactly one requester-facing path to release material: `GET /petitions/{id}/release`. No other endpoint returns item ciphertext, the item header or approval envelopes to a requester, and none of them is placed at a static or blob URL. A "retrieval link" is the petition's page URL, `/#petition=<petition_id>` on the Break Glass origin. It carries only the opaque petition ID, in the URL fragment, which browsers do not send in requests. It carries no token, so it grants nothing beyond what the authenticated session already allows.
 
 `release_decision(petition_id, caller, now)` runs in one transaction with row locks on the petition and the item. It returns the package only when every condition holds in that one evaluation:
 

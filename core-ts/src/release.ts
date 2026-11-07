@@ -119,27 +119,104 @@ export interface OpenedVaultItem {
   withheld: boolean;
 }
 
-export async function openRecovery(local: LocalRecovery, pkg: RecoveryPackage): Promise<OpenedVaultItem[]> {
+/**
+ * Fewer than k trustee contributions could be used. The service has already
+ * served the encrypted package, so the fix is more shares, not a new release:
+ * another trustee adds a share to the same recovery and the recoverer retries,
+ * or the trustees recover offline from printed cards and the bundle.
+ */
+export class RecoveryIncompleteError extends ReleaseError {
+  readonly failed: string[];
+  readonly usable: number;
+  readonly needed: number;
+  constructor(failed: string[], usable: number, needed: number) {
+    super(
+      failed.length > 0
+        ? `could not use the contributions from ${failed.join(", ")}; ${usable} usable of ${needed} needed`
+        : `${usable} usable contributions of ${needed} needed`,
+    );
+    this.name = "RecoveryIncompleteError";
+    this.failed = failed;
+    this.usable = usable;
+    this.needed = needed;
+  }
+}
+
+export interface OpenedRecovery {
+  items: OpenedVaultItem[];
+  /** Trustees whose shares rebuilt the verified key. */
+  used: string[];
+  /** Trustees whose contribution did not decrypt here or did not fit the key. */
+  failed: string[];
+}
+
+const MAX_SUBSETS = 500;
+
+function* subsets<T>(xs: T[], k: number, start = 0, acc: T[] = []): Generator<T[]> {
+  if (acc.length === k) {
+    yield acc.slice();
+    return;
+  }
+  for (let i = start; i <= xs.length - (k - acc.length); i++) {
+    acc.push(xs[i]);
+    yield* subsets(xs, k, i + 1, acc);
+    acc.pop();
+  }
+}
+
+/**
+ * Last Light: unlike Break Glass, a recovery may carry more than k
+ * contributions, and one bad contribution must not block the others. Each
+ * envelope is opened under this browser's own binding; ones that fail are set
+ * aside. Then k-subsets are tried until one passes the vault header check.
+ * Nothing is decrypted before that check passes.
+ */
+export async function openRecovery(local: LocalRecovery, pkg: RecoveryPackage): Promise<OpenedRecovery> {
   if (pkg.vault_id !== local.vaultId) throw new ReleaseError("package is for a different vault");
-  const shares = await openAll(
-    pkg.envelopes.map((e) => ({ id: e.trustee_id, envelope: e.envelope })),
-    pkg.threshold,
-    (env, trusteeId) =>
-      openRecoveryShare(env, local.privateKey, local.publicKey, {
+  const ids = pkg.envelopes.map((e) => e.trustee_id);
+  if (new Set(ids).size !== ids.length) throw new ReleaseError("two envelopes name the same trustee");
+  const opened: { id: string; share: Bytes }[] = [];
+  const failed: string[] = [];
+  for (const e of pkg.envelopes) {
+    try {
+      const share = await openRecoveryShare(fromBase64(e.envelope), local.privateKey, local.publicKey, {
         recoveryId: local.recoveryId,
         vaultId: local.vaultId,
         recovererId: local.recovererId,
-        trusteeId,
-      }),
-  );
-  const key = await combineShares(shares, pkg.threshold);
-  try {
-    try {
-      await checkVaultKey(key, local.vaultId, fromBase64(pkg.header));
-    } catch (e) {
-      if (e instanceof HeaderCheckError) throw new ReleaseError("shares do not rebuild this vault's key; nothing was decrypted");
-      throw e;
+        trusteeId: e.trustee_id,
+      });
+      if (opened.some((o) => shareIndex(o.share) === shareIndex(share) || o.share.length !== share.length)) failed.push(e.trustee_id);
+      else opened.push({ id: e.trustee_id, share });
+    } catch (err) {
+      if (!(err instanceof EnvelopeError)) throw err;
+      failed.push(e.trustee_id);
     }
+  }
+  if (opened.length < pkg.threshold) throw new RecoveryIncompleteError(failed, opened.length, pkg.threshold);
+
+  const header = fromBase64(pkg.header);
+  let key: Bytes | undefined;
+  let used: string[] = [];
+  let tried = 0;
+  for (const subset of subsets(opened, pkg.threshold)) {
+    if (++tried > MAX_SUBSETS) break;
+    const candidate = await combineShares(subset.map((s) => s.share), pkg.threshold);
+    try {
+      await checkVaultKey(candidate, local.vaultId, header);
+      key = candidate;
+      used = subset.map((s) => s.id);
+      break;
+    } catch (e) {
+      candidate.fill(0);
+      if (!(e instanceof HeaderCheckError)) throw e;
+    }
+  }
+  for (const o of opened) o.share.fill(0);
+  if (!key) {
+    // Every contribution decrypted, but no k of them rebuild the key.
+    throw new RecoveryIncompleteError([...failed, ...opened.map((o) => o.id)], 0, pkg.threshold);
+  }
+  try {
     const out: OpenedVaultItem[] = [];
     for (const it of pkg.items) {
       const base = { itemId: it.item_id, label: it.label, deliverTo: it.deliver_to, earliestRelease: it.earliest_release };
@@ -153,7 +230,7 @@ export async function openRecovery(local: LocalRecovery, pkg: RecoveryPackage): 
       });
       out.push({ ...base, body, withheld: false });
     }
-    return out;
+    return { items: out, used, failed };
   } finally {
     key.fill(0);
   }

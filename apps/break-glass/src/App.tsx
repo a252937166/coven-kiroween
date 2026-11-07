@@ -15,6 +15,9 @@ import {
   listItems,
   listPetitions,
   openPetition,
+  petition,
+  petitionIdFromHash,
+  petitionLink,
   retrieve,
   sealItem,
   setupDemo,
@@ -23,6 +26,7 @@ import {
 } from "@coven/ui-kit/breakglass.ts";
 import { Badge, clock, ErrorLine, MailViewer, personaName, RecordVerifier, Shell, useAction, usePersonas } from "@coven/ui-kit/components.tsx";
 import type { Receipt } from "@coven/core-ts/records";
+import { ApiError } from "@coven/ui-kit/api.ts";
 
 const api = new Api({ app: "break-glass" });
 const ks = new IndexedDbKeyStore("coven-break-glass");
@@ -54,9 +58,16 @@ export function App() {
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [now, setNow] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
-  const [released, setReleased] = useState<null | { petitionId: string; itemId: string; secret: string; notice: string }>(null);
+  const [released, setReleased] = useState<null | Released>(null);
   const [loaded, setLoaded] = useState(false);
+  const [linkId, setLinkId] = useState<string | null>(() => petitionIdFromHash(window.location.hash));
   const { busy, error, run } = useAction();
+
+  useEffect(() => {
+    const onHash = () => setLinkId(petitionIdFromHash(window.location.hash));
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
@@ -76,14 +87,16 @@ export function App() {
       const lk: Record<string, boolean> = {};
       for (const p of ps) {
         if (p.requester_id === me) {
-          await forgetIfTerminal(ks, p);
+          // The petition opened by link keeps its key until the service itself
+          // refuses retrieval (410), so a reused link is tested end to end.
+          if (p.petition_id !== linkId) await forgetIfTerminal(ks, p);
           lk[p.petition_id] = await hasLocalKey(ks, p.petition_id);
         }
       }
       setLocalKeys(lk);
       setLoaded(true);
     })().catch(() => setLoaded(true));
-  }, [me, tick]);
+  }, [me, tick, linkId]);
 
   const onPersona = async (id: string) => {
     setReleased(null);
@@ -109,6 +122,22 @@ export function App() {
       <div className="grid">
         <main>
           {loaded && items.length === 0 && <Setup onDone={refresh} />}
+          {linkId && me && (
+            <LinkView
+              pid={linkId}
+              me={me}
+              personas={personas}
+              tick={tick}
+              onReleased={(r) => {
+                setReleased(r);
+                refresh();
+              }}
+              onClose={() => {
+                history.replaceState(null, "", window.location.pathname);
+                setLinkId(null);
+              }}
+            />
+          )}
           {released && (
             <ReleasedView
               released={released}
@@ -192,6 +221,12 @@ export function App() {
                       )}
                     </div>
                     {mine && <p className="small muted">{p.retrieval_notice}</p>}
+                    {mine && (
+                      <p className="small">
+                        <a href={petitionLink(window.location.origin, window.location.pathname, p.petition_id)}>Petition link</a>{" "}
+                        <span className="muted">(contains only the petition ID; it works only for you while you are signed in)</span>
+                      </p>
+                    )}
                   </article>
                 );
               })}
@@ -394,6 +429,96 @@ function ReleasedView(props: {
         </div>
       )}
       {item?.rotation_state === "rotated" && <p className="notice ok small">Rotation recorded. Reseal the item with the new value.</p>}
+    </section>
+  );
+}
+
+type Released = { petitionId: string; itemId: string; secret: string; notice: string };
+
+/** Opened from a petition link. Every retrieval is decided by the service for the signed-in user. */
+function LinkView(props: {
+  pid: string;
+  me: string;
+  personas: { id: string; name: string; app: string; role: string }[];
+  tick: number;
+  onReleased: (r: Released) => void;
+  onClose: () => void;
+}) {
+  const { pid, me, personas } = props;
+  const [status, setStatus] = useState<PetitionStatus | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [haveKey, setHaveKey] = useState(false);
+  const [refused, setRefused] = useState<string | null>(null);
+  const { busy, error, run } = useAction();
+  const [n, setN] = useState(0);
+
+  useEffect(() => setRefused(null), [pid, me]);
+
+  useEffect(() => {
+    setMissing(false);
+    petition(api, pid).then(setStatus, (e) => {
+      setStatus(null);
+      if (e instanceof ApiError && e.status === 404) setMissing(true);
+    });
+    hasLocalKey(ks, pid).then(setHaveKey);
+  }, [pid, me, props.tick, n]);
+
+  return (
+    <section className="card" aria-labelledby="link-h" style={{ borderColor: "var(--info)" }}>
+      <div className="spread">
+        <h2 id="link-h">Petition link</h2>
+        <button onClick={props.onClose}>Close</button>
+      </div>
+      {missing && <p role="status">This petition is not available to {personaName(personas, me)}. Nothing is released through this link.</p>}
+      {status && (
+        <>
+          <p>
+            {status.item_name} · requested by {personaName(personas, status.requester_id)} · <Badge tone={STATE_TONE[status.state]}>{status.state}</Badge>
+          </p>
+          <p className="small muted">
+            Link ends {status.expires_at} ({remaining(status.expires_at, status.server_now)}) · approvals {status.approvals} of {status.threshold}
+          </p>
+          {status.state === "Expired" && (
+            <p className="notice danger small">This link stopped working at {status.expires_at}. A new release needs a new petition.</p>
+          )}
+          <p className="small">{status.retrieval_notice}</p>
+        </>
+      )}
+      {status && status.requester_id === me && haveKey && (
+        <button
+          className="primary"
+          disabled={busy}
+          onClick={() =>
+            run(async () => {
+              try {
+                const r = await retrieve(api, ks, pid);
+                props.onReleased({ petitionId: pid, itemId: status.item_id, secret: r.secret, notice: r.notice });
+              } catch (e) {
+                if (e instanceof ApiError && (e.status === 410 || e.status === 409 || e.status === 404)) {
+                  setRefused(
+                    e.status === 410
+                      ? `Retrieval refused: the petition is ${String(e.body.state ?? e.code).toLowerCase()}. Nothing was sent; the petition key in this browser was deleted.`
+                      : "Retrieval refused: the petition has not reached quorum.",
+                  );
+                } else throw e;
+              } finally {
+                setN((x) => x + 1);
+              }
+            })
+          }
+        >
+          Retrieve and decrypt in this browser
+        </button>
+      )}
+      {status && status.requester_id === me && !haveKey && !refused && (
+        <p className="small muted">This browser does not hold this petition's key (it was used or removed).</p>
+      )}
+      {refused && (
+        <p className="notice danger small" role="alert">
+          {refused}
+        </p>
+      )}
+      <ErrorLine error={error} />
     </section>
   );
 }

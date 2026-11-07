@@ -23,7 +23,7 @@ import {
 } from "@coven/ui-kit/lastlight.ts";
 import { Badge, clock, ErrorLine, MailViewer, personaName, RecordVerifier, Shell, useAction, usePersonas } from "@coven/ui-kit/components.tsx";
 import type { Persona } from "@coven/ui-kit/common.ts";
-import type { OpenedVaultItem } from "@coven/core-ts/release";
+import { RecoveryIncompleteError, type OpenedRecovery } from "@coven/core-ts/release";
 import type { Receipt } from "@coven/core-ts/records";
 
 const api = new Api({ app: "last-light" });
@@ -34,7 +34,7 @@ const LANTERN: Record<VaultStatus["state"], { icon: string; tone: "ok" | "warn" 
   Flicker: { icon: "🕯️", tone: "warn", text: "Flickering. A check-in was missed; the owner has been reminded." },
   Vigil: { icon: "🌘", tone: "warn", text: "Vigil. The grace period is running. A check-in now cancels the handover." },
   Handover: { icon: "🌑", tone: "danger", text: "Handover. The vigil ended and trustees were told. A check-in still cancels it until release." },
-  Released: { icon: "📜", tone: "info", text: "Released. A quorum of trustees rebuilt the vault key." },
+  Released: { icon: "📜", tone: "info", text: "Released. The service sent the encrypted package to the recovering trustee. The vault key is rebuilt and checked in that trustee's browser." },
 };
 
 export function App() {
@@ -259,11 +259,13 @@ function ShareCard({ v, me, personas, onChanged }: { v: VaultStatus; me: string;
 function RecoveryPanel({ v, me, personas, onChanged }: { v: VaultStatus; me: string; personas: Persona[]; onChanged: () => void }) {
   const r = v.recovery;
   const [typed, setTyped] = useState("");
-  const [opened, setOpened] = useState<OpenedVaultItem[] | null>(null);
+  const [opened, setOpened] = useState<OpenedRecovery | null>(null);
+  const [incomplete, setIncomplete] = useState<RecoveryIncompleteError | null>(null);
   const [haveKey, setHaveKey] = useState(false);
   const { busy, error, run } = useAction();
   useEffect(() => {
     setOpened(null);
+    setIncomplete(null);
     if (r) hasRecoveryKey(ks, r.recovery_id).then(setHaveKey);
   }, [r?.recovery_id, me]);
 
@@ -295,9 +297,12 @@ function RecoveryPanel({ v, me, personas, onChanged }: { v: VaultStatus; me: str
             {r.submitted_by.length > 0 && <> ({r.submitted_by.map((t) => personaName(personas, t)).join(", ")})</>}
           </p>
           <p className="small muted">Recoverer key fingerprint <code>{r.fingerprint.slice(0, 32).match(/.{4}/g)!.join(" ")}</code></p>
-          {r.state === "Open" && !submitted && (
+          {(r.state === "Open" || r.state === "Complete") && !submitted && (
             <div className="card sub">
-              <h3>Submit my share</h3>
+              <h3>{r.state === "Open" ? "Submit my share" : "Add my share to this recovery"}</h3>
+              {r.state === "Complete" && (
+                <p className="small muted">The package was already sent. Add your share if the recovering trustee could not use one of the others.</p>
+              )}
               <div className="row">
                 <button className="primary" disabled={busy} onClick={() => run(async () => { await submitShare(api, ks, me, v); onChanged(); })}>
                   Use my stored share
@@ -319,12 +324,37 @@ function RecoveryPanel({ v, me, personas, onChanged }: { v: VaultStatus; me: str
               <button
                 className="primary"
                 disabled={busy || !haveKey || r.submitted_by.length < v.threshold}
-                onClick={() => run(async () => { const res = await completeRecovery(api, ks, r.recovery_id); setOpened(res.items); onChanged(); })}
+                onClick={() =>
+                  run(async () => {
+                    setIncomplete(null);
+                    try {
+                      setOpened(await completeRecovery(api, ks, r.recovery_id));
+                    } catch (e) {
+                      if (e instanceof RecoveryIncompleteError) setIncomplete(e);
+                      else throw e;
+                    } finally {
+                      onChanged();
+                    }
+                  })
+                }
               >
-                Rebuild the vault key here and open
+                {r.state === "Complete" ? "Fetch the package again and retry" : "Fetch the package and rebuild the key here"}
               </button>
               {r.submitted_by.length < v.threshold && <span className="small muted">Waiting for {v.threshold - r.submitted_by.length} more.</span>}
               {!haveKey && <span className="small muted">This browser does not hold the recovery key.</span>}
+            </div>
+          )}
+          {isRecoverer && r.state === "Open" && (
+            <p className="small muted">
+              Fetching the package marks the vault Released, because the service has then sent the encrypted shares. This browser checks them
+              afterwards.
+            </p>
+          )}
+          {incomplete && (
+            <div className="notice danger small" role="alert">
+              <strong>The vault key was not rebuilt.</strong> {incomplete.failed.length > 0 && <>The contribution from {incomplete.failed.map((t) => personaName(personas, t)).join(", ")} could not be used here. </>}
+              {incomplete.usable} usable of {incomplete.needed} needed. Ask another trustee to add their share to this recovery, then retry. Trustees can
+              also recover offline from printed cards and the bundle.
             </div>
           )}
         </>
@@ -332,7 +362,11 @@ function RecoveryPanel({ v, me, personas, onChanged }: { v: VaultStatus; me: str
       <ErrorLine error={error} />
       {opened && (
         <div className="stack" style={{ marginTop: "0.75rem" }}>
-          {opened.map((it) => (
+          <p className="notice ok small">
+            Vault key rebuilt and verified in this browser (header check passed) from the shares of {opened.used.map((t) => personaName(personas, t)).join(", ")}.
+            {opened.failed.length > 0 && <> Not used: {opened.failed.map((t) => personaName(personas, t)).join(", ")}.</>}
+          </p>
+          {opened.items.map((it) => (
             <article className="card sub" key={it.itemId}>
               <div className="spread">
                 <h3>{it.label}</h3>

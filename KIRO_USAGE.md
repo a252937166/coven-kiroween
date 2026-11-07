@@ -7,6 +7,7 @@ Only what was actually used is listed. Each entry points to a committed artifact
 - Spec 05 `petition-lifecycle-and-binding`: the owner wrote `requirements.md`. Kiro drafted `design.md` and `tasks.md` (2026-11-06), then revised the design to split the approver share endpoint and record decisions D1 to D7 (2026-11-07, run 2).
   - Artifacts: `.kiro/specs/05-petition-lifecycle-and-binding/`
   - Run 3 (2026-11-07, Kiro in Kiro Crew) implemented tasks 1 to 8 and 9.2 against the spec and recorded each check's result in the `tasks.md` progress log.
+  - Run 4 (2026-11-07, same session) closed a review pass from 87b5879: scenario 3 in the browser, U+007F parity, the records snapshot, Last Light release wording and retry, and the AG-01 command. Evidence is in the run 4 entry of the `tasks.md` progress log.
 
 ### Requirement → design → code → verified behavior
 
@@ -18,11 +19,13 @@ Only what was actually used is listed. Each entry points to a committed artifact
 | BG-02.3 reseal invalidates | section 1 | `petitions.activate_seal_version` | T-09; ui-kit end-to-end test |
 | BG-03.4 client rejects foreign envelopes | section 6 | `core-ts/src/release.ts` `openRelease` | T-13 in `core-ts/test/release.test.ts` |
 | GR-ROT rotation and window copy | section 8 | `petitions.ROTATION_COPY`, Break Glass release screen | T-15; Playwright test `e2e/demos.spec.ts` |
+| BG-01.3 issued link refused after expiry (scenario 3) | section 5 | `petitionLink`, `LinkView` in `apps/break-glass`, `petitions.release` | Run 4: Playwright reuses a link with a local key and valid session; 410 after expiry, 404 for an ineligible user; fails when the release-time expiry check is removed |
+| Invariant 9 record hashing across languages | proposal 3.4 | `core-ts/src/records.ts` `canonicalJson`, `service/coven_service/common.py` | Run 4: `fixtures/record-vectors.json` asserted by both suites; the old U+007F handling fails it |
 
 ## Surfaces
 
 - Kiro CLI (local session): the run that created commit 6136333 (spec decisions, AG gate docs and scripts, first envelope slice), as reported by the owner.
-- Kiro in Kiro Crew (local session): runs 1 and 3, which drafted the spec and built the code after 6136333.
+- Kiro in Kiro Crew (local session): runs 1, 3 and 4, which drafted the spec, built the code after 6136333 and closed the review pass.
 
 ## Steering
 
@@ -30,15 +33,15 @@ Only what was actually used is listed. Each entry points to a committed artifact
 
 ## Property-based testing
 
-- TypeScript: fast-check properties in `core-ts/test/shares.test.ts` (any k shares rebuild; wrong, foreign, duplicate or short shares fail; word-code checksum catches every single-symbol change and adjacent swap) and `core-ts/test/envelope.test.ts`. Written by Kiro; 35 of 35 core tests passed in run 3.
-- Python: Hypothesis `RuleBasedStateMachine` for petitions and a receipt-outcome property, in `service/tests/`. Written by Kiro; 28 of 28 service tests passed in run 3. These ran with pytest from the agent shell, not through the IDE's property-based testing feature.
+- TypeScript: fast-check properties in `core-ts/test/shares.test.ts` (any k shares rebuild; wrong, foreign, duplicate or short shares fail; word-code checksum catches every single-symbol change and adjacent swap) and `core-ts/test/envelope.test.ts`. Written by Kiro; 35 of 35 core tests passed in run 3 and 40 of 40 in run 4.
+- Python: Hypothesis `RuleBasedStateMachine` for petitions and a receipt-outcome property, in `service/tests/`. Written by Kiro; 28 of 28 service tests passed in run 3 and 32 of 32 in run 4. These ran with pytest from the agent shell, not through the IDE's property-based testing feature.
 
 ## Acceptance evidence
 
 | Gate | Status | Evidence |
 |---|---|---|
-| AG-01 Printed card | Procedure in `docs/acceptance/AG-01-printed-card.md`; scanner `scripts/scan-capture.mjs` (self-test passes). A screen rehearsal in `e2e/demos.spec.ts` found no share text in requests, the service log or the bundle, and recovered with the CLI from card codes. **Not run:** needs a card printed on paper and read back by a person. | rehearsal only |
-| AG-02 Committed `.kiro/` | `scripts/check-kiro-tracked.sh . HEAD` passes on local commit 12300a0; 9 of 9 ignore fixtures pass. **Not run:** needs the submission commit. | rehearsal only |
+| AG-01 Printed card | Procedure in `docs/acceptance/AG-01-printed-card.md`; scanner `scripts/scan-capture.mjs` (self-test passes). A screen rehearsal in `e2e/demos.spec.ts` found no share text in requests, the service log or the bundle, and recovered with the CLI from card codes. Run 4 checked the guide's root-relative stdin command. **Pending:** needs a card printed on paper and read back by a person. | rehearsal only |
+| AG-02 Committed `.kiro/` | `scripts/check-kiro-tracked.sh . HEAD` passes on local commit 12300a0; 9 of 9 ignore fixtures pass. **Pending:** needs a clean public checkout of the submission commit. | rehearsal only |
 
 ## Not yet used
 

@@ -190,3 +190,65 @@ test("Last Light: check-in cancels, recovery with a typed card code, offline CLI
   }
   assert.match(logs, /route=\/api\/ll\/recoveries\/\{rid\}\/package/);
 });
+
+import { fromBase64, toBase64 } from "@coven/core-ts/bytes";
+import { openTrusteeShare, sealRecoveryShare } from "@coven/core-ts/envelope";
+import { RecoveryIncompleteError } from "@coven/core-ts/release";
+import { requireKey } from "../src/common.ts";
+
+test("Last Light: one undecryptable contribution after release, a supplement, then a retry (real envelopes)", async () => {
+  const { api, ks } = browser("last-light");
+  await api.post("/api/demo/reset");
+  const vaultId = await ll.setupDemo(api, ks);
+  await advanceClock(api, 48 * 86400);
+
+  await api.signIn("user:ada");
+  let status = await ll.beginRecovery(api, ks, "user:ada", vaultId);
+  const rid = status.recovery!.recovery_id;
+  await ll.submitShare(api, ks, "user:ada", status);
+  await api.signIn("user:bram");
+  await ll.submitShare(api, ks, "user:bram", await ll.vault(api, vaultId));
+
+  // Cleo's real share, sealed under the wrong recovery ID: shape-valid, so the service accepts it.
+  await api.signIn("user:cleo");
+  status = await ll.vault(api, vaultId);
+  const cleo = await requireKey(ks, "user:cleo");
+  const { share_blob } = await api.get<{ share_blob: string }>(`/api/ll/vaults/${vaultId}/my-share`);
+  const share = await openTrusteeShare(fromBase64(share_blob), cleo.privateKey, cleo.publicKey, { vaultId, trusteeId: "user:cleo" });
+  const bad = await sealRecoveryShare(share, fromBase64(status.recovery!.public_key), {
+    recoveryId: "not-this-recovery",
+    vaultId,
+    recovererId: "user:ada",
+    trusteeId: "user:cleo",
+  });
+  await api.post(`/api/ll/recoveries/${rid}/shares`, { envelope: toBase64(bad) });
+
+  // The package is served (vault becomes Released), but this browser cannot rebuild the key yet.
+  await api.signIn("user:ada");
+  await assert.rejects(ll.completeRecovery(api, ks, rid), (e: unknown) => {
+    assert.ok(e instanceof RecoveryIncompleteError);
+    assert.deepEqual(e.failed, ["user:cleo"]);
+    assert.equal(e.usable, 2);
+    return true;
+  });
+  assert.equal((await ll.vault(api, vaultId)).state, "Released");
+
+  // The owner cannot undo a release by checking in.
+  await api.signIn(ll.OWNER);
+  await assert.rejects(ll.checkIn(api, vaultId), (e: unknown) => e instanceof ApiError && e.status === 409);
+
+  // Cleo cannot replace her contribution; Dov adds his share to the same recovery.
+  await api.signIn("user:cleo");
+  const again = await ll.submitShare(api, ks, "user:cleo", await ll.vault(api, vaultId));
+  assert.equal(again.counted, false);
+  await api.signIn("user:dov");
+  const sup = await ll.submitShare(api, ks, "user:dov", await ll.vault(api, vaultId));
+  assert.equal(sup.counted, true);
+
+  await api.signIn("user:ada");
+  const opened = await ll.completeRecovery(api, ks, rid);
+  assert.match(opened.items[0].body!, /blue pumpkin/);
+  assert.deepEqual(opened.failed, ["user:cleo"]);
+  assert.deepEqual(opened.used, ["user:ada", "user:bram", "user:dov"]);
+  assert.ok((await mail(api)).some((m) => m.subject === "Another share was added"));
+});

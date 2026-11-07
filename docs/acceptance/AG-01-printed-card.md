@@ -2,7 +2,7 @@
 
 Source: [spec 05 requirements, AG-01](../../.kiro/specs/05-petition-lifecycle-and-binding/requirements.md) and the acceptance-evidence section of [guarantees.md](../../.kiro/steering/guarantees.md).
 
-Status: **defined in M0, not runnable yet.** It needs the Last Light recovery flow (M2) and a physical printer.
+Status: **pending.** The recovery flow, the share-card view, the offline tool and the scanner exist and pass a screen rehearsal (`e2e/demos.spec.ts`). The gate itself still needs a card printed on paper and read back by a person. A rehearsal from a screen is not a pass.
 
 ## What it proves
 
@@ -15,13 +15,13 @@ Status: **defined in M0, not runnable yet.** It needs the Last Light recovery fl
 |---|---|
 | Physical printer and paper | The gate reads the share from the printed card. A screen rehearsal is useful but does not pass the gate. |
 | A person reading the card | The QR is scanned from paper, or the word code is typed from paper. |
-| Last Light share-card view (spec 02, spec 10) | Generates the card in the browser. |
-| Offline tool `core-ts` `recover-cli` (spec 03) | Performs recovery with the service stopped. |
+| Last Light share-card view ("My share card" in `apps/last-light`) | Generates the card in the browser. |
+| Offline tool `core-ts/bin/recover.js` | Performs recovery with the service stopped. |
 | Capture scanner `scripts/scan-capture.mjs` (spec 05 task 9.2) | Searches the captured data. |
 
 ## Fixtures
 
-Use only the fictional demo family vault (3 of 5 trustees) and its sample letter. Never use a real secret, a real person's name or a real address.
+Use only the fictional demo family vault ("Set up demo" in Last Light: Mara Hollow and trustees Ada, Bram, Cleo, Dov, Esme, 3 of 5) and its sample letter, which contains "blue pumpkin". Never use a real secret, a real person's name or a real address.
 
 ## Procedure
 
@@ -29,17 +29,19 @@ Use only the fictional demo family vault (3 of 5 trustees) and its sample letter
    - every browser request to the service (browser devtools "Save all as HAR", or a local proxy bound to 127.0.0.1),
    - service stdout, stderr and log files,
    - any telemetry sink configured for the run (demo mode ships none; record that fact).
-2. In the browser, open trustee 1's share card. Print it. Export the bundle to `bundle.json`.
-3. While the card view is still open, copy its QR payload and word code into `secrets.local.txt` **outside the repository**. This file is used only by the scanner.
+2. In the browser, sign in as a trustee (for example Bram), click "Show my card", then "Print card" and print it on paper. As any trustee, click "Download bundle" and save it as `bundle.json` in the repository root.
+3. While the card view is still open, copy its word code into `secrets.local.txt` **outside the repository**, one share per line. If you also scan the QR from paper later, add the `coven1:` text your reader shows. This file is used only by the scanner.
 4. Stop the capture. Stop the service. Confirm it is stopped (the app's health URL fails).
-5. Read the share from the paper: scan the QR with a phone or webcam reader, or type the word code. Get two more shares from other trustees' cards or digital shares.
-6. Run `node recover.js bundle.json --share <from paper> --share <2> --share <3>`. Expect the sample letter's text.
+5. Read the share from the paper: scan the QR with a phone or webcam reader (it shows `coven1:...` text), or read the word code. Get two more fictional shares from other trustees' cards (printed, or written down from their card view before the service was stopped).
+6. From the repository root, run `node core-ts/bin/recover.js bundle.json`. It asks for shares on stdin: enter the share from paper and the two others, one per line, then an empty line. Entering shares on stdin keeps them out of shell history. Expect the sample letter's text ("blue pumpkin").
 7. Run `node scripts/scan-capture.mjs <capture-dir> secrets.local.txt`. It searches for each secret as raw hex, base64, base64url, the `coven1:` payload and the word code with and without separators, in any case. It prints only file names and offsets, never the matched value.
 8. Delete `secrets.local.txt`.
 
 ## Pass rule
 
 Pass when step 6 prints the expected text **and** step 7 exits 0 with no matches.
+
+The gate stays **pending** until a person runs it with a paper card. AG-02 (the final public checkout of the submission commit) is a separate gate and is also pending.
 
 ## Evidence to keep
 

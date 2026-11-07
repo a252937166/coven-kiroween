@@ -6,7 +6,7 @@ import { openApproverShare, sealApproval, sealApproverShare } from "@coven/core-
 import { exportRawPublicKey, generateEphemeralKeyPair } from "@coven/core-ts/keys";
 import { openRelease, type LocalPetition, type ReleasePackage } from "@coven/core-ts/release";
 import { sealCredential } from "@coven/core-ts/vault";
-import type { Api } from "./api.ts";
+import { ApiError, type Api } from "./api.ts";
 import { checkedFingerprint, directory, ensureEnrolled, FlowError, requireKey } from "./common.ts";
 import type { KeyStore } from "./keystore.ts";
 
@@ -164,10 +164,32 @@ export async function hasLocalKey(ks: KeyStore, pid: string) {
 export async function retrieve(api: Api, ks: KeyStore, pid: string): Promise<{ secret: string; notice: string; expiresAt: string }> {
   const local = await ks.get<LocalPetition>(`petition:${pid}`);
   if (!local) throw new FlowError("this browser no longer holds the petition key (already opened, or a different browser)");
-  const pkg = await api.get<ReleasePackage & { retrieval_notice: string; expires_at: string }>(`/api/bg/petitions/${pid}/release`);
+  let pkg: ReleasePackage & { retrieval_notice: string; expires_at: string };
+  try {
+    pkg = await api.get(`/api/bg/petitions/${pid}/release`);
+  } catch (e) {
+    // 410: expired, denied or invalidated. The service will never serve this
+    // petition again, so the petition key is no longer useful here.
+    if (e instanceof ApiError && e.status === 410) await ks.delete(`petition:${pid}`);
+    throw e;
+  }
   const secret = await openRelease(local, pkg);
   await ks.delete(`petition:${pid}`);
   return { secret, notice: pkg.retrieval_notice, expiresAt: pkg.expires_at };
+}
+
+/**
+ * Same-origin link to a petition. It carries only the opaque petition ID, in
+ * the URL fragment (never sent in requests). It grants nothing by itself:
+ * every retrieval is still checked against the signed-in session.
+ */
+export function petitionLink(origin: string, pathname: string, pid: string): string {
+  return `${origin}${pathname}#petition=${encodeURIComponent(pid)}`;
+}
+
+export function petitionIdFromHash(hash: string): string | null {
+  const m = /^#petition=([0-9a-f-]{36})$/.exec(hash);
+  return m ? m[1] : null;
 }
 
 /** Drop the ephemeral key of a petition that is terminal. */

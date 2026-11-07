@@ -37,3 +37,18 @@ def test_three_outcomes(types, data):
         swapped = list(entries)
         swapped[0], swapped[1] = swapped[1], swapped[0]
         assert verify_receipt(swapped, rec) == "altered"
+
+
+def test_shared_vectors_match_fixture():
+    """Same file as core-ts/test/records-vectors.test.ts (U+007F, controls, astral, nesting)."""
+    import json
+    from pathlib import Path
+
+    doc = json.loads((Path(__file__).resolve().parents[2] / "fixtures" / "record-vectors.json").read_text())
+    prev = GENESIS
+    for v in doc["vectors"]:
+        e = v["entry"]
+        assert canonical_json(e) == v["canonical"], v["name"]
+        assert v["prev"] == prev
+        assert entry_hash(prev, e["seq"], e["at"], e["type"], e["data"]) == v["hash"], v["name"]
+        prev = v["hash"]

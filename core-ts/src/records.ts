@@ -34,7 +34,10 @@ export function canonicalJson(value: unknown): string {
     return String(value);
   }
   if (typeof value === "string") {
-    return JSON.stringify(value).replace(/[\u0080-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+    // Python's ensure_ascii escapes everything outside U+0020..U+007E, so DEL
+    // (U+007F) and every UTF-16 unit above it become \uXXXX (lowercase hex).
+    // JSON.stringify already escapes U+0000..U+001F the same way Python does.
+    return JSON.stringify(value).replace(/[\u007f-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
   }
   if (Array.isArray(value)) return "[" + value.map(canonicalJson).join(",") + "]";
   if (typeof value === "object") {

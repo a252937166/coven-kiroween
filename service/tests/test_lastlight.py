@@ -112,3 +112,64 @@ def test_demo_clock_moves_forward_only(env):
     assert c.post("/api/demo/clock", json={"advance_seconds": -5}).status_code == 422
     assert c.post("/api/demo/clock", json={"advance_seconds": 0}).status_code == 422
     assert c.post("/api/demo/clock", json={"advance_seconds": 60}).json()["offset_seconds"] == 60
+
+
+def test_records_endpoint_observes_lantern_state(env):
+    vid = make_vault(env)
+    env["time"].t += 31 * DAY  # no vault read in between
+    rec = env["as"]("user:ada").get(f"/api/records/ll:{vid}").json()
+    assert rec["entries"][-1]["type"] == "lantern.flicker"
+    assert rec["receipt"] == {"length": len(rec["entries"]), "head": rec["entries"][-1]["hash"]}
+
+
+def test_records_snapshot_under_concurrent_appends(env):
+    """A receipt never names more rows than the response holds, while another
+    client appends records concurrently."""
+    import threading
+
+    from coven_service.common import verify_receipt
+
+    vid = make_vault(env)
+    ada, bram = env["as"]("user:ada"), env["as"]("user:bram")
+    stop = threading.Event()
+
+    def writer():
+        while not stop.is_set():
+            bram.post(f"/api/ll/vaults/{vid}/card-issued")
+
+    t = threading.Thread(target=writer)
+    t.start()
+    try:
+        lengths = []
+        for _ in range(40):
+            rec = ada.get(f"/api/records/ll:{vid}").json()
+            assert rec["receipt"]["length"] == len(rec["entries"])
+            assert verify_receipt(rec["entries"], rec["receipt"]) == "consistent"
+            lengths.append(len(rec["entries"]))
+    finally:
+        stop.set()
+        t.join()
+    assert lengths[-1] > lengths[0]  # appends really interleaved with reads
+
+
+def test_supplement_after_release_and_no_checkin_revival(env):
+    vid = make_vault(env)
+    env["time"].t += 47 * DAY
+    ada = env["as"]("user:ada")
+    rid = ada.post(f"/api/ll/vaults/{vid}/recoveries", json={"public_key": b64(raw_public_key())}).json()["recovery"]["recovery_id"]
+    for t in ("user:ada", "user:bram", "user:cleo"):
+        env["as"](t).post(f"/api/ll/recoveries/{rid}/shares", json={"envelope": b64(fake_envelope())})
+    assert ada.get(f"/api/ll/recoveries/{rid}/package").status_code == 200
+    assert state(env, vid) == "Released"
+    # Material was served: the owner cannot check in to undo it.
+    assert env["as"]("user:mara").post(f"/api/ll/vaults/{vid}/checkin").status_code == 409
+    # Another trustee may add a share to the same recovery; a repeat does not count twice.
+    r = env["as"]("user:dov").post(f"/api/ll/recoveries/{rid}/shares", json={"envelope": b64(fake_envelope())})
+    assert r.status_code == 200 and r.json()["counted"] is True
+    again = env["as"]("user:dov").post(f"/api/ll/recoveries/{rid}/shares", json={"envelope": b64(fake_envelope())})
+    assert again.json()["counted"] is False
+    pkg = ada.get(f"/api/ll/recoveries/{rid}/package").json()
+    assert len(pkg["envelopes"]) == 4
+    assert state(env, vid) == "Released"
+    assert env["as"]("user:bram").get(f"/api/ll/recoveries/{rid}/package").status_code == 404
+    assert env["as"]("user:robin").post(f"/api/ll/recoveries/{rid}/shares", json={"envelope": b64(fake_envelope())}).status_code == 404

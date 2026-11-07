@@ -5,7 +5,9 @@ Lantern: Lit -> Flicker -> Vigil -> Handover -> Released.
 - Flicker: the check-in was missed. The owner is reminded.
 - Vigil: the grace period. A check-in still cancels everything.
 - Handover: the vigil ended. Trustees are told; one may open a recovery.
-- Released: a recovery reached quorum and the package was served.
+- Released: a recovery reached quorum and the encrypted package was served
+  to the recovering trustee. The service cannot know whether that browser
+  then rebuilt and verified the key; Released means "material was served".
 A check-in in any state before Released relights the lantern and cancels any
 pending handover and open recovery. A missed check-in is a signal, not proof
 of death. Time only moves forward.
@@ -322,7 +324,12 @@ def submit_share(conn, now: int, user: str, rid: str, envelope: bytes) -> dict:
     if user not in _trustees(v):
         raise Rejected(404, "not_found")
     v = _observe(conn, v, now)
-    if r["state"] != "Open" or derived_state(v, now) != "Handover":
+    open_now = r["state"] == "Open" and derived_state(v, now) == "Handover"
+    # After the package was served the vault stays Released (no check-in can
+    # undo that). Other trustees may still add shares to the same recovery, so
+    # the recoverer can retry if one contribution does not decrypt.
+    supplement = r["state"] == "Complete" and v["released_at"] is not None
+    if not (open_now or supplement):
         raise Rejected(409, "recovery_not_open", extra={"state": r["state"]})
     if conn.execute("SELECT 1 FROM ll_recovery_shares WHERE recovery_id = ? AND trustee_id = ?", (rid, user)).fetchone():
         return {"counted": False, "vault": get_vault(conn, now, user, v["vault_id"])}
@@ -332,9 +339,12 @@ def submit_share(conn, now: int, user: str, rid: str, envelope: bytes) -> dict:
     n = conn.execute("SELECT COUNT(*) AS n FROM ll_recovery_shares WHERE recovery_id = ?", (rid,)).fetchone()["n"]
     append_record(conn, chain_of(v["vault_id"]), now, "recovery.share_submitted",
                   {"vault": v["vault_id"], "recovery": rid, "trustee": user, "count": n})
-    if n >= v["threshold"]:
+    if supplement:
+        notify(conn, APP, r["recoverer_id"], "Another share was added",
+               f"{user} added a share to recovery {rid[:8]}. Retry opening the vault in Last Light.", now)
+    elif n >= v["threshold"]:
         notify(conn, APP, r["recoverer_id"], "Recovery ready",
-               f"{n} trustees have submitted shares. Open Last Light to rebuild the vault key in your browser.", now)
+               f"{n} trustees have submitted shares. Open Last Light to fetch the encrypted package and rebuild the vault key in your browser.", now)
     return {"counted": True, "vault": get_vault(conn, now, user, v["vault_id"])}
 
 
@@ -378,7 +388,9 @@ def recovery_package(conn, now: int, user: str, rid: str) -> dict:
                             {"vault": v["vault_id"], "recovery": rid, "recoverer": user})
         for t in [v["owner_id"], *_trustees(v)]:
             notify(conn, APP, t, f"{v['name']} was released",
-                   f"{user} rebuilt the vault key with {len(shares)} trustee shares. Receipt {rec['length']}:{rec['head']}", now)
+                   f"The service sent the encrypted recovery package ({len(shares)} trustee shares) to {user}. "
+                   f"The vault key is rebuilt and checked in that trustee's browser, not by the service. "
+                   f"Receipt {rec['length']}:{rec['head']}", now)
     return {
         "recovery_id": rid,
         "vault_id": v["vault_id"],

@@ -249,13 +249,22 @@ def create_app(db_path: str, clock: Clock | None = None, demo: bool = True) -> F
                          (u, app_name)).fetchall()
         return [{"id": r["id"], "subject": r["subject"], "body": r["body"], "at": iso(r["at"])} for r in rows]
 
-    @app.get("/api/records/{chain}")
-    def records(chain: str, u: str = Depends(user), c=Depends(conn)):
+    def records_view(c, now: int, u: str, chain: str) -> dict:
+        """Runs inside one BEGIN IMMEDIATE transaction: the membership check,
+        any Last Light transition it records, and the read of entries all see
+        one snapshot. The receipt is derived from the returned entries, so it
+        can never name more rows than the response contains."""
         if chain.startswith("ll:"):
-            lastlight.get_vault(c, clock.now(c), u, chain[3:])  # membership check
+            lastlight.get_vault(c, now, u, chain[3:])  # membership check; records due lantern transitions
         elif chain != "bg" or PERSONAS[u]["app"] != "break-glass":
             raise Rejected(404, "not_found")
-        return {"entries": chain_entries(c, chain), "receipt": receipt(c, chain)}
+        entries = chain_entries(c, chain)
+        rec = {"length": entries[-1]["seq"], "head": entries[-1]["hash"]} if entries else receipt(c, chain)
+        return {"entries": entries, "receipt": rec}
+
+    @app.get("/api/records/{chain}")
+    def records(chain: str, u: str = Depends(user), c=Depends(conn)):
+        return run(c, records_view, u, chain)
 
     # -- Break Glass ----------------------------------------------------------
 
