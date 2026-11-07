@@ -37,6 +37,16 @@ Use only the fictional demo family vault ("Set up demo" in Last Light: Mara Holl
 7. Run `node scripts/scan-capture.mjs <capture-dir> secrets.local.txt`. It searches for each secret as raw hex, base64, base64url, the `coven1:` payload and the word code with and without separators, in any case. It prints only file names and offsets, never the matched value.
 8. Delete `secrets.local.txt`.
 
+## Scripted capture
+
+Steps 1 to 4 and 7 can be run with helper scripts. They write share values only to owner-only files in a private run directory outside the repository, and never print them or pass them as arguments.
+
+1. `scripts/ag01-stack.sh service <run-dir>` and `scripts/ag01-stack.sh preview <run-dir>`: an isolated service (127.0.0.1:8807, fresh database) and Last Light preview (127.0.0.1:5193). The normal demo ports are untouched.
+2. `node --experimental-strip-types scripts/ag01-capture.ts <run-dir> http://127.0.0.1:5193`: a fresh browser context with a HAR of every request. It writes Bram's card as `bram-share-card.pdf`, plus `bundle.json`, the scanner input `secrets.local.txt`, two supplementary fictional shares and `run-facts.json` (non-secret).
+3. `scripts/ag01-stack.sh stop`: stops both and checks that they are unreachable.
+4. `node scripts/scan-capture.mjs <run-dir>/capture <run-dir>/secrets.local.txt`.
+5. After a person prints the PDF and reads the share back from paper into `<run-dir>/paper-readback.local.txt`, run `scripts/ag01-offline.sh <run-dir>`. It checks the stack is unreachable, confirms the read-back is the printed share without printing it, and runs `node core-ts/bin/recover.js bundle.json` from the root with shares on stdin.
+
 ## Pass rule
 
 Pass when step 6 prints the expected text **and** step 7 exits 0 with no matches.

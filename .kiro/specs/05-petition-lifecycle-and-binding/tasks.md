@@ -209,6 +209,7 @@ Newest first. Another run resumes from the first entry.
   - _Requirements: AG-01_
 - [ ] 9.3 Run AG-01 with a physical printed card when the Last Light recovery flow exists, and record the result
   - Recovery flow now exists. Screen rehearsal passed in run 3 (see progress log); it is not a pass.
+  - Run 5 (2026-11-07): capture done for run-20261107 on code commit 7665e0d. Fresh isolated stack; card PDF (Bram, receipt at issuance `7:5a7be605fdb965c1f9c668fec6c5eb6dd1011adfa0d2514ad9944697f66a11d2`) and bundle exported. Stack stopped and confirmed unreachable. Scanner: no match in HAR (55 entries), service logs or bundle. **Pending:** paper print and read-back by the person, then `scripts/ag01-offline.sh`.
   - Blocked on: a person printing a card on paper and reading it back.
   - _Requirements: AG-01_
 
