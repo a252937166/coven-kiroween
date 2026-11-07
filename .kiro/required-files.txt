@@ -1,0 +1,8 @@
+# Paths that AG-02 requires to be present, tracked and unignored.
+# One path per line, relative to the repository root. Lines starting with # are comments.
+# Keep in sync with the artifacts cited in KIRO_USAGE.md.
+.kiro/required-files.txt
+.kiro/steering/guarantees.md
+.kiro/specs/05-petition-lifecycle-and-binding/requirements.md
+.kiro/specs/05-petition-lifecycle-and-binding/design.md
+.kiro/specs/05-petition-lifecycle-and-binding/tasks.md

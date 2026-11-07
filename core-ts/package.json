@@ -1,0 +1,15 @@
+{
+  "name": "@coven/core-ts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Coven shared core: envelopes, keys, shares, bundle and offline recovery. Used by the browser apps and the Node offline tool.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --no-warnings --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  }
+}

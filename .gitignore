@@ -1,0 +1,13 @@
+# Never ignore .kiro/ or anything under it (AG-02).
+node_modules/
+dist/
+coverage/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.hypothesis/
+*.local.txt
+.DS_Store
+!.kiro/
+!.kiro/**
