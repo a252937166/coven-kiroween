@@ -69,6 +69,10 @@ node core-ts/bin/recover.js verify last-light-bundle-XXXX.json --receipt <length
 
 `docs/screenshots/` holds 1440 px and 390 px views of both apps (fictional data; revealed content masked). Regenerate with `scripts/screenshots.ts` against a disposable service.
 
+## Submission packet
+
+Local, copy-ready Devpost text and images: `docs/submission/` (not submitted).
+
 ## Tests
 
 ```sh

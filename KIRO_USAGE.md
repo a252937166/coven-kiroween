@@ -4,7 +4,7 @@ Only what was actually used is listed. Each entry points to a committed artifact
 
 ## Specs
 
-- Spec 05 `petition-lifecycle-and-binding`: the owner wrote `requirements.md`. Kiro drafted `design.md` and `tasks.md` (2026-11-06), then revised the design to split the approver share endpoint and record decisions D1 to D7 (2026-11-07, run 2).
+- Spec 05 `petition-lifecycle-and-binding`: `requirements.md` and the guarantees are owner-directed M0 inputs (requirements and guarantees), with English drafting help from Codex, supplied to Kiro. Kiro drafted `design.md` and `tasks.md` (2026-11-06), then revised the design to split the approver share endpoint and record decisions D1 to D7 (2026-11-07, run 2).
   - Artifacts: `.kiro/specs/05-petition-lifecycle-and-binding/`
   - Run 3 (2026-11-07, Kiro in Kiro Crew) implemented tasks 1 to 8 and 9.2 against the spec and recorded each check's result in the `tasks.md` progress log.
   - Run 4 (2026-11-07, same session) closed a review pass from 87b5879: scenario 3 in the browser, U+007F parity, the records snapshot, Last Light release wording and retry, and the AG-01 command. Evidence is in the run 4 entry of the `tasks.md` progress log.
@@ -33,9 +33,11 @@ Only what was actually used is listed. Each entry points to a committed artifact
 
 - Run 7: Kiro fixed role-isolation edge cases found on independent review: a role epoch, keyed role-scoped panels, and plaintext bound to the requester. Each fix has a held-response browser check, plus a mutation run showing the check fails without the fix (`tasks.md`, run 7).
 
+- Run 10 (2026-11-08): Kiro prepared the local submission packet (`docs/submission/`), a 3:2 cover and a masked gallery, and a local demo film (2:47.7, not committed or uploaded). The narration used local Kokoro-82M (Apache-2.0). Codex supplied the rule recheck and QA notes.
+
 ## Steering
 
-- `.kiro/steering/guarantees.md` (owner-written, `inclusion: always`) shaped the design and the app copy: retrieval-window wording, "a missed check-in is a signal, not proof of death", routing labels, online-only earliest dates, and the offline-recovery statement on the Last Light screen and in `README.md`.
+- `.kiro/steering/guarantees.md` (owner-directed, drafted in English with Codex, supplied to Kiro; `inclusion: always`) shaped the design and the app copy: retrieval-window wording, "a missed check-in is a signal, not proof of death", routing labels, online-only earliest dates, and the offline-recovery statement on the Last Light screen and in `README.md`.
 
 ## Property-based testing
 

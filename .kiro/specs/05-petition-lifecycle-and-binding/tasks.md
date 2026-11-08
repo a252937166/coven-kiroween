@@ -13,6 +13,12 @@ Tasks 0, 9 and 10 are M0. Tasks 1 to 8 are M1 and M3.
 
 Newest first. Another run resumes from the first entry.
 
+- **2026-11-08, run 10 (Kiro in Kiro Crew): local submission packet.**
+  - `docs/submission/` holds the copy-ready form text, the cover and seven masked 1500x1000 gallery images.
+  - A local film (`scratchpad/demo-coven/`, excluded from Git) was recorded on a disposable stack. Each pass ran on a fresh database, with masks checked by a sentinel. The recorder asserted 1 of 2 blocked, a 200 release at 2 of 2, and an expired link answering 410 with no release fields.
+  - `validate_video.py` passed (167.7 s, 1920x1080, 30 fps, audio).
+  - Still open: public repo, AG-02 on the submission commit, judge deployment with per-judge demo state, YouTube upload, owner form fields.
+
 - **2026-11-08, run 9 (Kiro in Kiro Crew): AG-01 physical gate PASSED.** The owner confirmed printing Bram's card (fictional) on paper and typing the word code from the paper into the private run's mode-0600 read-back file. `scripts/ag01-offline.sh` ran on that captured fixture (run-20261107; card, bundle and capture from `7665e0d`; offline run on `65ce2f4`, with `core-ts/` and `service/` unchanged). Results:
   - Isolated stack unreachable before and after.
   - The read-back decodes and matches the printed share.
