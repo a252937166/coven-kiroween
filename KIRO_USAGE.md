@@ -46,7 +46,7 @@ Only what was actually used is listed. Each entry points to a committed artifact
 
 | Gate | Status | Evidence |
 |---|---|---|
-| AG-01 Printed card | Procedure in `docs/acceptance/AG-01-printed-card.md`; scanner `scripts/scan-capture.mjs` (self-test passes). A screen rehearsal in `e2e/demos.spec.ts` found no share text in requests, the service log or the bundle, and recovered with the CLI from card codes. Run 4 checked the guide's root-relative stdin command. **Pending:** needs a card printed on paper and read back by a person. | rehearsal only |
+| AG-01 Printed card | **Passed 2026-11-08** (run-20261107). The owner printed Bram's fictional card on paper and typed the word code from it. The read-back matched; three shares opened the vault offline, with the isolated service unreachable; the scanner found no share in the HAR, logs, bundle or CLI output. Card from commit `7665e0d`. Redacted record in `docs/acceptance/AG-01-printed-card.md`. A redacted card photo has not been provided. | physical pass |
 | AG-02 Committed `.kiro/` | `scripts/check-kiro-tracked.sh . HEAD` passes on local commit 12300a0; 9 of 9 ignore fixtures pass. **Pending:** needs a clean public checkout of the submission commit. | rehearsal only |
 
 ## Not yet used

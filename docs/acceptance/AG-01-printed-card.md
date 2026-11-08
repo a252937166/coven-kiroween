@@ -2,7 +2,7 @@
 
 Source: [spec 05 requirements, AG-01](../../.kiro/specs/05-petition-lifecycle-and-binding/requirements.md) and the acceptance-evidence section of [guarantees.md](../../.kiro/steering/guarantees.md).
 
-Status: **pending.** The recovery flow, the share-card view, the offline tool and the scanner exist and pass a screen rehearsal (`e2e/demos.spec.ts`). The gate itself still needs a card printed on paper and read back by a person. A rehearsal from a screen is not a pass.
+Status: **passed** on 2026-11-08 (run-20261107, physical paper card). See "Result" below. A screen rehearsal is not a pass; this result used a share typed from paper.
 
 ## What it proves
 
@@ -47,11 +47,28 @@ Steps 1 to 4 and 7 can be run with helper scripts. They write share values only 
 4. `node scripts/scan-capture.mjs <run-dir>/capture <run-dir>/secrets.local.txt`.
 5. After a person prints the PDF and reads the share back from paper into `<run-dir>/paper-readback.local.txt`, run `scripts/ag01-offline.sh <run-dir>`. It checks the stack is unreachable, confirms the read-back is the printed share without printing it, and runs `node core-ts/bin/recover.js bundle.json` from the root with shares on stdin.
 
+## Result: run-20261107 (PASS)
+
+| Item | Value |
+|---|---|
+| Verdict | **PASS** under the pass rule above (CLI text found, scanner no match) |
+| Run date | Capture 2026-11-07 about 18:55 UTC; paper read-back and offline run 2026-11-08, 03:07 EST |
+| Code under test | Card, bundle and capture from commit `7665e0d` (helpers `d64ffaa`). Offline run on `65ce2f4`; `core-ts/` and `service/` are unchanged between `7665e0d` and `65ce2f4` |
+| Card | Trustee Bram (fictional), "The Hollow family vault (fictional)", 3 of 5. Receipt at issuance `7:5a7be605fdb965c1f9c668fec6c5eb6dd1011adfa0d2514ad9944697f66a11d2` |
+| Paper provenance | The owner confirmed they printed Bram's card on physical paper and typed the word code directly from the paper into an owner-only file (mode 0600) |
+| Read-back | Decodes with a valid checksum; it is the same share as the printed card (checked without printing it) |
+| Isolated stack | Service 127.0.0.1:8807 and preview 127.0.0.1:5193 unreachable before and after the offline run |
+| Offline recovery | `node core-ts/bin/recover.js bundle.json` from the repo root, three shares on stdin (paper share plus Dov and Esme, fictional): exit 0, vault opened (3 items), expected letter text found |
+| Scanner | `scripts/scan-capture.mjs` with the run's scanner input (33 forms): no match in the capture (HAR, service stdout and stderr, preview log, telemetry note), the bundle, or the offline CLI output |
+| Telemetry | Demo ships no telemetry sink; recorded in the private telemetry note |
+| Cleanup | `secrets.local.txt` deleted after verification (step 8). Raw shares, PDF, bundle, HAR and CLI output stay private, outside the repository |
+| Evidence gap | No redacted photo of the printed card has been provided. The photo is listed under "Evidence to keep" but is not part of the pass rule; it remains outstanding |
+
+AG-02 (clean public checkout of the submission commit) is a separate gate and is still pending.
+
 ## Pass rule
 
 Pass when step 6 prints the expected text **and** step 7 exits 0 with no matches.
-
-The gate stays **pending** until a person runs it with a paper card. AG-02 (the final public checkout of the submission commit) is a separate gate and is also pending.
 
 ## Evidence to keep
 

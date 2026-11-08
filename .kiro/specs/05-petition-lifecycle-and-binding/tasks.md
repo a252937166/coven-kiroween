@@ -13,6 +13,15 @@ Tasks 0, 9 and 10 are M0. Tasks 1 to 8 are M1 and M3.
 
 Newest first. Another run resumes from the first entry.
 
+- **2026-11-08, run 9 (Kiro in Kiro Crew): AG-01 physical gate PASSED.** The owner confirmed printing Bram's card (fictional) on paper and typing the word code from the paper into the private run's mode-0600 read-back file. `scripts/ag01-offline.sh` ran on that captured fixture (run-20261107; card, bundle and capture from `7665e0d`; offline run on `65ce2f4`, with `core-ts/` and `service/` unchanged). Results:
+  - Isolated stack unreachable before and after.
+  - The read-back decodes and matches the printed share.
+  - Three shares on stdin opened the vault (3 items), and the expected letter text was found; exit 0.
+  - Scanner re-run with the same input: no match in the capture, the bundle or the CLI output.
+  - Scanner input deleted afterwards.
+  - Evidence gap: no redacted card photo has been provided (it is not part of the pass rule).
+  - Redacted record: `docs/acceptance/AG-01-printed-card.md`, "Result". AG-02 is still pending (submission commit).
+
 - **2026-11-07, run 8 (Kiro in Kiro Crew): session single-flight.** One page-wide lock (`ui-kit/src/session.ts`) is taken synchronously, so only one sign-in sequence can run at a time. It covers start-up, manual role switches and the multi-persona "Set up demo" (internal sign-ins and key enrollments). After every sign-in, including a failed or ambiguous one, the UI reads `GET /api/session` and shows that persona. Re-selecting the current persona sends nothing. While the lock is held, the role selector is disabled, and the main area, the demo controls and Last Light's proof area are `inert` and `aria-busy`. Role-scoped data is not loaded. No backend change; no visible design change (the Break Glass demo strip keeps its position through a wrapper); the print CSS and card are untouched.
   - Checks: `ui-kit/test/session.test.ts` (a second sequence started while one is pending never runs; the lock is released on failure). New Chromium test "Break Glass session lock": `POST /api/session` is held 1.5 s. The selector is disabled, the desk is inert and busy, the demo buttons cannot take focus, and the desk's "New petition" is absent. A forced second switch starts no sign-in (1 POST, at most 1 in flight). Afterwards the selector equals `GET /api/session` (Sage) and the desk is active again. Re-selecting Sage sends 0 sign-ins.
   - Runs: root typecheck 0 errors; build OK; `npm test` (core 40, service 32, ui-kit 5, scanner self-test, AG-02 fixtures 9); Playwright 5 of 5, twice. Previews on 5173 and 5174 serve this build. Screenshots were not recaptured (appearance unchanged).
@@ -83,7 +92,7 @@ Newest first. Another run resumes from the first entry.
 | T-13 | `core-ts/test/release.test.ts` | pass |
 | T-14 | `test_t14_no_material_in_logs`; browser test log scan | pass |
 | T-15 | `test_t15_rotation_follow_up`; browser test | pass |
-| AG-01 | screen rehearsal in `e2e/demos.spec.ts`; guide command checked from the root (run 4) | rehearsal only; gate pending (paper card) |
+| AG-01 | physical paper card, run-20261107, `scripts/ag01-offline.sh` + scanner (run 9) | **pass** (photo outstanding) |
 | AG-02 | `scripts/check-kiro-tracked.sh . HEAD` | rehearsal only; gate pending (public checkout of the submission commit) |
 
 - **2026-11-07, run 2 (Kiro).** The shell tool failed every call at the permission step ("permission request failed before it was answered"), including `pwd`. No command ran: no `git init`, no `node`, no tests. File-only work done:
@@ -234,7 +243,7 @@ Newest first. Another run resumes from the first entry.
   - _Requirements: GR-LOG_
   - _Checks: T-14_
 
-- [ ] 9. Acceptance gate AG-01: define in M0, run in M2
+- [x] 9. Acceptance gate AG-01: define in M0, run in M2
 - [x] 9.1 Write `docs/acceptance/AG-01-printed-card.md`
   - Procedure, dependencies (physical printer, person reading paper, M2 recovery flow), evidence and pass rule. Doc task; no code check applies.
   - _Requirements: AG-01_
@@ -242,7 +251,8 @@ Newest first. Another run resumes from the first entry.
   - Search for raw share bytes (hex, base64, base64url), the `coven1:` payload, and the word code with and without separators in any case. Exit non-zero on any match. Print only file and offset.
   - `node scripts/scan-capture.mjs --self-test`: PASS (7 leak forms detected, clean capture clean).
   - _Requirements: AG-01_
-- [ ] 9.3 Run AG-01 with a physical printed card when the Last Light recovery flow exists, and record the result
+- [x] 9.3 Run AG-01 with a physical printed card when the Last Light recovery flow exists, and record the result
+  - PASS 2026-11-08, run-20261107 (see progress log, run 9). Photo evidence outstanding.
   - Recovery flow now exists. Screen rehearsal passed in run 3 (see progress log); it is not a pass.
   - Run 5 (2026-11-07): capture done for run-20261107 on code commit 7665e0d. Fresh isolated stack; card PDF (Bram, receipt at issuance `7:5a7be605fdb965c1f9c668fec6c5eb6dd1011adfa0d2514ad9944697f66a11d2`) and bundle exported. Stack stopped and confirmed unreachable. Scanner: no match in HAR (55 entries), service logs or bundle. **Pending:** paper print and read-back by the person, then `scripts/ag01-offline.sh`.
   - Blocked on: a person printing a card on paper and reading it back.
