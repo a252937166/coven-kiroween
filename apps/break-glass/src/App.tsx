@@ -43,7 +43,19 @@ import {
   type Tone,
 } from "@coven/ui-kit/components.tsx";
 import { StaleFlowError, type Persona } from "@coven/ui-kit/common.ts";
+import { useEntrance, useNewlyAdded, useServerClock } from "@coven/ui-kit/motion.ts";
 import type { Receipt, RecordEntry } from "@coven/core-ts/records";
+import { Relay, type RelayMode } from "./Instrument.tsx";
+
+const NONE: ReadonlySet<number> = new Set();
+const MODE: Record<PetitionStatus["state"], RelayMode> = {
+  Open: "open",
+  Approved: "approved",
+  Released: "released",
+  Expired: "expired",
+  Denied: "denied",
+  Invalidated: "invalidated",
+};
 
 const api = new Api({ app: "break-glass" });
 const ks = new IndexedDbKeyStore("coven-break-glass");
@@ -222,18 +234,17 @@ export function App() {
     released && released.petitionId === current && released.viewer === me && isCurrentEpoch(released.epoch) ? released : null;
 
   const isAdmin = me === ADMIN;
+  const entering = useEntrance(loaded, 3200, pending);
 
   return (
-    <div className="bg-app">
+    <div className={`bg-app${entering ? " entering" : ""}`}>
       <a className="skip" href="#desk">Skip to desk</a>
-      <aside className="bg-rail" aria-label="Break Glass">
+      <header className="bg-top">
         <div className="bg-brand">
           <CovenMark />
           <span className="bg-wordmark">Break Glass</span>
           <span className="bg-tagline">Incident credential desk</span>
         </div>
-        <RoleSwitch personas={personas} me={me} onPersona={onPersona} pending={pending} />
-        {me && <p className="bg-role small">{personaRole(personas, me)}</p>}
         <nav aria-label="Sections" className="bg-nav">
           <a href="#desk">Requests</a>
           <a href="#items-h">Sealed items</a>
@@ -243,7 +254,11 @@ export function App() {
         <div className="bg-demo" inert={pending}>
           <DemoClock api={api} ks={ks} serverNow={now} steps={[clock.minutes(5), clock.minutes(30)]} onChanged={refresh} />
         </div>
-      </aside>
+        <div className="bg-who">
+          <RoleSwitch personas={personas} me={me} onPersona={onPersona} pending={pending} />
+          {me && <p className="bg-role small">{personaRole(personas, me)}</p>}
+        </div>
+      </header>
 
       <main className="bg-main" id="desk" inert={pending} aria-busy={pending}>
         {loaded && items.length === 0 && <Setup runSignedInFlow={runSignedInFlow} />}
@@ -286,6 +301,11 @@ export function App() {
                           {personaName(personas, p.requester_id)} · “{p.reason}”
                         </span>
                         <span className="bg-row-meta small tnum">
+                          <span className={`bg-row-cells${MODE[p.state] === "expired" || MODE[p.state] === "denied" || MODE[p.state] === "invalidated" ? " cut" : ""}`} aria-hidden="true">
+                            {Array.from({ length: p.threshold }, (_, i) => (
+                              <i key={i} className={i < p.approvals ? "on" : ""} />
+                            ))}
+                          </span>
                           {p.approvals}/{p.threshold} approvals · ends {hms(p.expires_at)} UTC
                           {actionable(p) && <span className="bg-row-flag"> · your action</span>}
                         </span>
@@ -335,7 +355,9 @@ export function App() {
                   />
                 ) : (
                   <section className="bg-ticket bg-empty">
-                    <p>Select a request, or open a new petition.</p>
+                    <p className="bg-kicker">Workbench · nothing selected</p>
+                    <Relay mode="idle" threshold={items[0]?.threshold ?? 2} approvals={0} names={[]} pulse={NONE} windowLeft={null} />
+                    <p className="bg-empty-line">Select a request, or open a new petition.</p>
                   </section>
                 )}
               </div>
@@ -379,11 +401,41 @@ function Latest({ entry }: { entry: RecordEntry | null }) {
   );
 }
 
+/**
+ * The relay for one loaded petition. Mounted with the petition already loaded,
+ * so approvals that were in before this view only pulse when the service
+ * confirms a new one.
+ */
+function RelayPanel({ p, mode, nowMs, personas }: { p: PetitionStatus; mode: RelayMode; nowMs: number | null; personas: Persona[] }) {
+  const arrived = useNewlyAdded(p.approved_by.map((a) => `${p.petition_id}:${a}`));
+  const pulse = new Set<number>();
+  p.approved_by.forEach((a, i) => {
+    if (arrived.has(`${p.petition_id}:${a}`)) pulse.add(i + 1);
+  });
+  const created = Date.parse(p.created_at);
+  const expires = Date.parse(p.expires_at);
+  const now = nowMs ?? Date.parse(p.server_now);
+  const timed = p.state === "Open" || p.state === "Approved" || p.state === "Released";
+  const windowLeft = timed ? (expires - now) / Math.max(1, expires - created) : p.state === "Expired" ? 0 : null;
+  return (
+    <Relay
+      mode={mode}
+      threshold={p.threshold}
+      approvals={p.approvals}
+      names={p.approved_by.map((a) => personaName(personas, a).split(" ")[0])}
+      pulse={pulse}
+      windowLeft={windowLeft}
+      windowText={windowLeft === null ? undefined : `window ${remaining(p.expires_at, new Date(now).toISOString())}`}
+    />
+  );
+}
+
 function Setup({ runSignedInFlow }: { runSignedInFlow: <T>(fn: () => Promise<T>) => Promise<T | undefined> }) {
   const [log, setLog] = useState<string[]>([]);
   const { busy, error, run } = useAction();
   return (
     <section className="bg-ticket bg-setup" aria-labelledby="setup-h">
+      <Relay mode="idle" threshold={2} approvals={0} names={[]} pulse={NONE} windowLeft={null} />
       <p className="bg-kicker">Desk closed · no credentials sealed</p>
       <h1 id="setup-h">Set up the fictional team</h1>
       <p>
@@ -508,6 +560,19 @@ function Ticket(props: {
     return () => { stale = true; };
   }, [pid, me, props.tick, n, live]);
 
+  // Display only: the service clock advanced locally between fetches. The service alone decides expiry.
+  const nowMs = useServerClock(p?.server_now);
+  const nowIso = nowMs !== null ? new Date(nowMs).toISOString() : (p?.server_now ?? "");
+  // The aperture opens only when this browser decrypted and verified the item for its own requester,
+  // and only while the service still treats the petition as active. A terminal state from the
+  // service (Expired, Denied, Invalidated) always closes and cuts the path, even if the value
+  // retrieved earlier is still shown on this page.
+  const shown =
+    p !== null && !!props.released && props.released.viewer === me && p.requester_id === me && props.released.petitionId === p.petition_id;
+  const terminal = p !== null && (p.state === "Expired" || p.state === "Denied" || p.state === "Invalidated");
+  const opened = shown && !terminal;
+  const mode: RelayMode = !p ? "idle" : opened ? "opened" : MODE[p.state];
+
   const item = props.items.find((i) => i.item_id === p?.item_id);
   const eligible = p !== null && p.eligible_approvers.includes(me);
   const mine = p?.requester_id === me;
@@ -545,9 +610,14 @@ function Ticket(props: {
           <button className="link" onClick={props.onClose}>Close link</button>
         </div>
       )}
-      {missing && <p role="status" className="bg-missing">This petition is not available to {name(me)}. Nothing is released through this link.</p>}
+      {missing && (
+        <>
+          <p role="status" className="bg-missing">This petition is not available to {name(me)}. Nothing is released through this link.</p>
+          <Relay mode="idle" threshold={props.items[0]?.threshold ?? 2} approvals={0} names={[]} pulse={NONE} windowLeft={null} />
+        </>
+      )}
       {p && (
-        <article aria-label={`Petition for ${p.item_name}`}>
+        <article className={`bg-card s-${p.state.toLowerCase()}${opened ? " is-open" : ""}`} aria-label={`Petition for ${p.item_name}`}>
           <header className={`bg-strip tone-${STATE[p.state].tone}`}>
             <div className="spread">
               <p className="bg-kicker">Petition · one sealed item</p>
@@ -560,6 +630,9 @@ function Ticket(props: {
             <p className="bg-state-line">{STATE[p.state].line}</p>
           </header>
 
+          <RelayPanel p={p} mode={mode} nowMs={nowMs} personas={personas} />
+
+          <div className="bg-instruments">
           <dl className="bg-facts">
             <div>
               <dt>Quorum</dt>
@@ -573,7 +646,7 @@ function Ticket(props: {
               <dd className="tnum">
                 <strong>{hms(p.expires_at)}</strong> UTC
               </dd>
-              <dd className="small tnum">{p.expires_at.slice(0, 10)} · {remaining(p.expires_at, p.server_now)}</dd>
+              <dd className="small tnum">{p.expires_at.slice(0, 10)} · {remaining(p.expires_at, nowIso)}</dd>
             </div>
             <div>
               <dt>Requester</dt>
@@ -598,7 +671,9 @@ function Ticket(props: {
             </ul>
             {p.self_approved && <p className="small"><span className="chip warn">includes a self-approval</span></p>}
           </div>
+          </div>
 
+          <div className="bg-work">
           <div className="bg-actionstrip" aria-label="Your action">
             {eligible && p.state === "Open" && !approvedByMe && (
               <>
@@ -645,6 +720,7 @@ function Ticket(props: {
           {props.released && props.released.viewer === me && p.requester_id === me && props.released.petitionId === p.petition_id && (
             <ReleasedView
               released={props.released}
+              closedAs={terminal ? STATE[p.state].label : null}
               item={item}
               onHide={props.onHide}
               onRotated={() => run(() => props.onRotated(props.released!.itemId))}
@@ -669,6 +745,7 @@ function Ticket(props: {
               <div><dt>Opened</dt><dd className="tnum">{utc(p.created_at)}</dd></div>
             </dl>
           </details>
+          </div>
         </article>
       )}
     </section>
@@ -746,15 +823,28 @@ function ItemsPanel(props: { items: BgItem[]; isAdmin: boolean; personas: Person
   );
 }
 
-function ReleasedView(props: { released: Released; item: BgItem | undefined; onHide: () => void; onRotated: () => void }) {
-  const { released, item } = props;
+function ReleasedView(props: {
+  released: Released;
+  /** Set when the service has since closed the petition: the label of that terminal state. */
+  closedAs: string | null;
+  item: BgItem | undefined;
+  onHide: () => void;
+  onRotated: () => void;
+}) {
+  const { released, item, closedAs } = props;
   const [copied, setCopied] = useState(false);
   return (
-    <div className="bg-released" aria-labelledby="rel-h">
+    <div className={`bg-released${closedAs ? " closed" : ""}`} aria-labelledby="rel-h">
       <div className="spread">
         <h3 id="rel-h">Decrypted and verified in this browser: {item?.name ?? released.itemId}</h3>
         <button onClick={props.onHide}>Hide</button>
       </div>
+      {closedAs && (
+        <p className="bg-closed-note small" role="status">
+          Retrieved earlier, while the petition was active. The service now reports it {closedAs.toLowerCase()} and will not serve it again.
+          This copy stays on this page until you hide it.
+        </p>
+      )}
       <p className="small">
         Rebuilt from the approvers' shares; every share envelope and the item header checked out here. Only this item's key was rebuilt.
         Hiding it clears it from this page.

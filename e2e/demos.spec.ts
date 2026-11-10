@@ -159,6 +159,7 @@ test("Break Glass scenario 3: a reused petition link works in the window and is 
   // B: the requester still holds the petition key and a valid session; the service refuses.
   await linkCard.getByRole("button", { name: "Retrieve and decrypt in this browser" }).click();
   await expect(linkCard.getByText(/Retrieval refused: the petition is expired/)).toBeVisible();
+  await expect(linkCard.locator(".bg-relay")).toHaveClass(/\bm-expired\b/); // the release path is drawn cut, not open
   await expect(linkCard.getByRole("button", { name: "Retrieve and decrypt in this browser" })).toHaveCount(0);
   await expect(page.getByText("moonlit-cauldron")).toHaveCount(0);
   await page.screenshot({ path: join(dir, "break-glass-link-expired.png"), fullPage: true });
