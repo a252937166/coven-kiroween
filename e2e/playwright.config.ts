@@ -11,6 +11,10 @@ import { join } from "node:path";
 const dir = process.env.COVEN_E2E_DIR ?? mkdtempSync(join(tmpdir(), "coven-pw-"));
 process.env.COVEN_E2E_DIR = dir;
 const SERVICE = 8797;
+// Hosted mode (hosted.spec.ts): a private demo space per browser, with the
+// production cookie settings. Every browser here comes from 127.0.0.1, so the
+// per-address bound is raised for the test.
+const HOSTED = 8798;
 
 export default defineConfig({
   testDir: ".",
@@ -42,6 +46,26 @@ export default defineConfig({
       cwd: join(import.meta.dirname, "../apps/break-glass"),
       env: { COVEN_SERVICE: `http://127.0.0.1:${SERVICE}` },
       url: "http://127.0.0.1:5184",
+      reuseExistingServer: false,
+    },
+    {
+      command: `sh -c 'exec ../service/.venv/bin/python -m coven_service --port ${HOSTED} --spaces-dir "${dir}/spaces" --spaces-per-client 200 > "${dir}/hosted-service.log" 2>&1'`,
+      cwd: join(import.meta.dirname, "../service"),
+      url: `http://127.0.0.1:${HOSTED}/api/personas`,
+      reuseExistingServer: false,
+    },
+    {
+      command: "npx vite preview --port 5185",
+      cwd: join(import.meta.dirname, "../apps/last-light"),
+      env: { COVEN_SERVICE: `http://127.0.0.1:${HOSTED}` },
+      url: "http://127.0.0.1:5185",
+      reuseExistingServer: false,
+    },
+    {
+      command: "npx vite preview --port 5186",
+      cwd: join(import.meta.dirname, "../apps/break-glass"),
+      env: { COVEN_SERVICE: `http://127.0.0.1:${HOSTED}` },
+      url: "http://127.0.0.1:5186",
       reuseExistingServer: false,
     },
   ],

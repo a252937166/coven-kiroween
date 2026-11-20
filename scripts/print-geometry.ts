@@ -15,7 +15,6 @@ const exe = process.env.PW_CHROMIUM;
 const browser = await chromium.launch({ headless: true, ...(exe ? { executablePath: exe } : {}) });
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 const page = await context.newPage();
-page.on("dialog", (d) => d.accept());
 
 async function signInAs(name: string) {
   const select = page.getByLabel(/Signed in as|Viewing as/);

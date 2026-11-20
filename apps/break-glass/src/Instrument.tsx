@@ -3,7 +3,8 @@
 // sealed item. Every visual state follows what the service reported for the
 // petition, or a decrypt this browser verified. Nothing here invents progress.
 
-import { useId, type CSSProperties } from "react";
+import { useId, useRef, type CSSProperties } from "react";
+import { useInView } from "@coven/ui-kit/motion.ts";
 
 export type RelayMode = "idle" | "open" | "approved" | "released" | "opened" | "expired" | "denied" | "invalidated";
 
@@ -57,14 +58,18 @@ export function Relay(props: {
   approvals: number;
   /** First names of the approvers, in the order their approvals were recorded. */
   names: string[];
-  /** 1-based cells whose approval the service just confirmed. */
+  /** 1-based cells this petition's approval count just lit. */
   pulse: ReadonlySet<number>;
+  /** True just after this petition crossed its approval threshold. */
+  latch?: boolean;
   /** Fraction of the retrieval window left by the service clock, or null when it does not apply. */
   windowLeft: number | null;
   windowText?: string;
 }) {
   const { mode, threshold, names, windowLeft, windowText } = props;
   const uid = useId().replace(/:/g, "");
+  const figure = useRef<HTMLElement>(null);
+  const sweepLive = useInView(figure);
   const T = Math.max(1, threshold);
   const approvals = Math.min(props.approvals, T);
   const quorum = approvals >= T;
@@ -93,13 +98,17 @@ export function Relay(props: {
     return { k: j, a: right(j - 1), b: left(j), lit, release: j === n + 1 };
   });
   const pulse = new Set([...props.pulse].map((i) => (compact ? 1 : i)));
-  const quorumPulse = props.pulse.has(T) && quorum;
+  const latching = !!props.latch && quorum && !cut;
   const label = STATUS[mode](approvals, T);
   const win = windowLeft === null ? null : Math.max(0, Math.min(1, windowLeft));
   const pad = cw < CELL_W ? 10 : 12;
 
   return (
-    <figure className={`bg-relay m-${mode}${quorum ? " quorum" : ""}`}>
+    <figure ref={figure} className={`bg-relay m-${mode}${quorum ? " quorum" : ""}${latching ? " latching" : ""}`}>
+      {/* Decorative only: a sweep around the idle or waiting relay. It shows no state and pauses offscreen or when hidden. */}
+      {(mode === "idle" || mode === "open") && <span className={`bg-sweep${sweepLive ? "" : " paused"}`} aria-hidden="true" />}
+      {/* Event only: one bright sweep around the panel when the threshold is crossed. */}
+      {latching && <span className="bg-sweep once" aria-hidden="true" />}
       <svg viewBox={`0 0 ${W} 214`} width={W} height={214} role="img" aria-label={`Release path. ${label}`}>
         <defs>
           <radialGradient id={`${uid}-core`} cx="50%" cy="50%" r="50%">
@@ -144,17 +153,11 @@ export function Relay(props: {
               ) : (
                 <line x1={s.a} y1={Y} x2={s.b} y2={Y} className="run" />
               )}
-              {!isCut && ((s.k <= T && pulse.has(s.k)) || (s.release && quorumPulse)) && (
-                <line
-                  x1={s.a}
-                  y1={Y}
-                  x2={s.b}
-                  y2={Y}
-                  className="pulse"
-                  pathLength={100}
-                  style={{ animationDelay: s.release ? "0.75s" : "0s" } as CSSProperties}
-                />
+              {/* A newly lit cell relays one pulse onward: to the next cell, or down the release run at the threshold. */}
+              {!isCut && !compact && !s.release && s.k >= 2 && pulse.has(s.k - 1) && (
+                <line x1={s.a} y1={Y} x2={s.b} y2={Y} className="pulse probe" pathLength={100} />
               )}
+              {!isCut && s.release && latching && <line x1={s.a} y1={Y} x2={s.b} y2={Y} className="pulse go" pathLength={100} />}
             </g>
           );
         })}
@@ -175,7 +178,10 @@ export function Relay(props: {
             const lit = k <= approvals;
             const cx = cellX(k);
             return (
-              <g key={k} className={`cell${lit ? " lit" : ""}${pulse.has(k) ? " fresh" : ""}${cutAt !== null && k >= cutAt && !lit ? " dead" : ""}`}>
+              <g
+                key={k}
+                className={`cell${lit ? " lit" : ""}${pulse.has(k) ? " fresh" : ""}${!lit && pulse.has(k - 1) ? " knock" : ""}${cutAt !== null && k >= cutAt && !lit ? " dead" : ""}`}
+              >
                 <rect x={cx - cw / 2} y={Y - CELL_H / 2} width={cw} height={CELL_H} rx={12} className="cell-box" />
                 <text x={cx - cw / 2 + pad} y={Y - 9} className="cap">{k === T ? `${k} · quorum` : `${k}`}</text>
                 <text x={cx - cw / 2 + pad} y={Y + 15} className="cell-name">
@@ -204,6 +210,12 @@ export function Relay(props: {
             />
           )}
           <circle cx={AP_X} cy={Y} r={AP_R} className="rim" />
+          {latching && (
+            <>
+              <circle cx={AP_X} cy={Y} r={AP_R + 3} className="ap-sweep" pathLength={100} />
+              <circle cx={AP_X} cy={Y} r={AP_R + 10} className="ap-wave" />
+            </>
+          )}
           <circle cx={AP_X} cy={Y} r={BLADE_R} className="core" fill={`url(#${uid}-core)`} />
           <g className="core-key">
             <circle cx={AP_X - 9} cy={Y} r={9} />

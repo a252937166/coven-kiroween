@@ -57,14 +57,19 @@
 .bg-nav a { padding: 0.3rem 0.55rem; border-radius: 8px; font-size: 0.86rem; color: #cfe6ec; text-decoration: none; }
 .bg-nav a:hover { background: var(--surface-2); color: #ffffff; }
 .bg-demo { flex: none; }
+/* Demo tools stay small and quiet: the desk is the subject. Reset is a secondary text control. */
 .bg-demo .demo-strip {
-  gap: 0.45rem; padding: 0.25rem 0.35rem 0.25rem 0.65rem;
+  gap: 0.35rem; padding: 0.15rem 0.2rem 0.15rem 0.6rem; font-size: 0.75rem;
   border: 1px dashed #2f5966; border-radius: 22px; background: rgba(4, 13, 16, 0.6); color: var(--muted); white-space: nowrap;
 }
 .bg-demo .demo-strip .tag { color: #ffd08a; }
 .bg-demo .demo-strip time { color: var(--text); }
-.bg-demo .demo-strip button { border-radius: 999px; background: var(--surface); border-color: var(--bg-line); color: var(--text); }
-.bg-demo .demo-strip button.danger { color: var(--danger); border-color: rgba(255, 138, 115, 0.45); background: transparent; }
+.bg-demo .demo-strip button { min-height: 1.6rem; padding: 0.1rem 0.55rem; border-radius: 999px; background: var(--surface); border-color: var(--bg-line); color: var(--text); font-size: 0.75rem; }
+.bg-demo .demo-strip button.danger {
+  border-color: transparent; background: transparent; color: var(--muted);
+  text-decoration: underline; text-decoration-color: rgba(142, 176, 186, 0.45); text-underline-offset: 3px;
+}
+.bg-demo .demo-strip button.danger:hover:not(:disabled) { border-color: rgba(255, 138, 115, 0.45); background: transparent; color: var(--danger); }
 .bg-who { display: flex; align-items: center; gap: 0.6rem; }
 .bg-who label { color: var(--muted); }
 .bg-who select { min-width: 13rem; padding: 0.4rem 0.9rem; border-radius: 999px; background: var(--surface); border-color: #2f5966; }
@@ -146,6 +151,22 @@
 }
 .bg-actionstrip p { margin: 0; }
 .bg-actionstrip:empty { display: none; }
+.bg-actionctx { display: flex; flex-wrap: wrap; flex-basis: 100%; gap: 0.2rem 1.1rem; color: var(--muted); }
+.bg-actionctx strong { color: #effcff; font-weight: 650; }
+.bg-actionctx .tnum { font-family: var(--mono); }
+.bg-keyline { color: var(--muted); }
+.bg-keyline code { color: #cfe6ec; letter-spacing: 0.04em; }
+.bg-confirm {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.7rem; padding: 0.45rem 0.6rem;
+  border: 1px solid rgba(255, 138, 115, 0.55); border-radius: 10px; background: rgba(255, 138, 115, 0.07);
+}
+.bg-confirm .small { color: #ffd9d0; }
+.bg-missing-key { max-width: 46rem; padding: 0.45rem 0.7rem; border-left: 3px solid var(--warn); border-radius: 6px; background: rgba(255, 195, 107, 0.07); }
+.bg-rotate {
+  display: flex; flex-wrap: wrap; flex-basis: 100%; align-items: center; gap: 0.4rem 0.8rem; padding: 0.45rem 0.7rem;
+  border-left: 3px solid var(--danger); border-radius: 6px; background: rgba(255, 138, 115, 0.07);
+}
+.bg-rotate p { flex: 1 1 18rem; color: #ffd9d0; }
 .bg-linkline { margin-top: 0.8rem; }
 .bg-notice { margin-top: 0.8rem; color: var(--muted); }
 .bg-tech { margin-top: 0.8rem; color: var(--muted); }
@@ -172,6 +193,7 @@
 
 /* ---------- the relay instrument ---------- */
 .bg-relay {
+  position: relative; isolation: isolate;
   grid-area: relay; margin: 0; padding: 0.85rem 1rem 0.8rem;
   border: 1px solid var(--border); border-radius: 16px;
   background:
@@ -180,19 +202,46 @@
 }
 .bg-relay.m-released, .bg-relay.m-opened { background: radial-gradient(ellipse 40% 90% at 84% 48%, rgba(255, 182, 72, 0.14), transparent 70%), linear-gradient(180deg, rgba(16, 39, 47, 0.92), rgba(8, 24, 30, 0.92)); }
 .bg-relay svg { display: block; width: 100%; height: auto; max-width: 860px; margin: 0 auto; overflow: visible; }
+/* Decorative: a cyan sweep around the perimeter of the idle or waiting relay.
+ * It shows no state and is separate from the approval pulse, the window arc
+ * and the aperture. Rotation only; paused offscreen or in a hidden tab; off
+ * for reduced motion and print. */
+.bg-sweep {
+  position: absolute; inset: -1px; z-index: 0; overflow: hidden; padding: 2px; border-radius: 16px; pointer-events: none;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+.bg-sweep::before {
+  content: ""; position: absolute; left: 50%; top: 50%; width: max(160%, 640px); aspect-ratio: 1; translate: -50% -50%;
+  background: conic-gradient(from 0deg, rgba(70, 215, 242, 0) 0 62%, rgba(70, 215, 242, 0.2) 78%, rgba(139, 238, 255, 0.95) 95%, #eaffff 97%, rgba(70, 215, 242, 0) 98.5%);
+  animation: bg-sweep 3.6s linear infinite;
+}
+.bg-sweep.paused::before { animation-play-state: paused; }
+.bg-sweep.once::before {
+  background: conic-gradient(from 0deg, rgba(70, 215, 242, 0) 0 55%, rgba(70, 215, 242, 0.35) 75%, #c9f7ff 95%, #ffffff 97%, rgba(70, 215, 242, 0) 98.5%);
+  animation: bg-sweep-once 1.05s cubic-bezier(0.45, 0.05, 0.3, 1) 0.3s both;
+}
+@keyframes bg-sweep { to { transform: rotate(1turn); } }
+@media (prefers-reduced-motion: reduce) { .bg-sweep { display: none; } }
+@media print { .bg-sweep { display: none; } }
 .bg-relay .run { stroke: var(--bg-line); stroke-width: 4; stroke-linecap: round; transition: stroke 0.6s ease; }
 .bg-relay .seg.lit .run { stroke: var(--bg-cyan); }
 .bg-relay.m-released .seg.release .run, .bg-relay.m-opened .seg.release .run { stroke: var(--bg-warm); }
 .bg-relay .seg.dead .run { stroke: #1b3038; stroke-dasharray: 2 9; }
 .bg-relay .seg.cut .run { stroke: #3b2e2c; }
 .bg-relay .break { fill: none; stroke: var(--danger); stroke-width: 4; stroke-linecap: round; }
-.bg-relay .pulse { stroke: #effdff; stroke-width: 7; stroke-linecap: round; stroke-dasharray: 16 140; stroke-dashoffset: 16; opacity: 0; animation: bg-pulse 0.95s cubic-bezier(0.35, 0.1, 0.25, 1) backwards; }
+.bg-relay .pulse { stroke: #effdff; stroke-width: 5; stroke-linecap: round; stroke-dasharray: 12 140; stroke-dashoffset: 12; opacity: 0; filter: drop-shadow(0 0 4px rgba(139, 238, 255, 0.9)); }
+.bg-relay .pulse.probe { animation: bg-relay-pulse 0.55s cubic-bezier(0.3, 0, 0.2, 1) 0.12s backwards; }
+.bg-relay .pulse.go { stroke-width: 6; animation: bg-relay-pulse 0.5s cubic-bezier(0.3, 0, 0.2, 1) 0.1s backwards; }
 .bg-relay .cap { font: 650 10.5px/1 var(--font); letter-spacing: 0.08em; text-transform: uppercase; fill: #7d9ea8; }
 .bg-relay .cut-cap { fill: var(--danger); }
 .bg-relay .cell-box { fill: #0b2129; stroke: var(--bg-line); stroke-width: 1.5; transition: fill 0.6s ease, stroke 0.6s ease; }
 .bg-relay .cell.lit .cell-box { fill: rgba(70, 215, 242, 0.13); stroke: var(--bg-cyan); }
 .bg-relay .cell.part .cell-box { stroke: #3d8ea3; }
-.bg-relay .cell.fresh .cell-box { animation: bg-cell-on 1.2s 0.6s ease-out backwards; }
+.bg-relay .cell.fresh .cell-box { transform-box: fill-box; transform-origin: center; animation: bg-cell-snap 0.42s cubic-bezier(0.2, 1.5, 0.35, 1); }
+.bg-relay .cell.knock .cell-box { animation: bg-cell-knock 0.5s ease-out 0.55s; }
 .bg-relay .cell.dead .cell-box { stroke-dasharray: 4 5; opacity: 0.6; }
 .bg-relay .cell-name { font: 650 14px/1 var(--font); fill: #a9c4cc; }
 .bg-relay .cell.lit .cell-name { fill: #e8fbff; }
@@ -210,6 +259,14 @@
 .bg-relay .rim { fill: #06171c; stroke: #3d6370; stroke-width: 3; transition: stroke 0.6s ease; }
 .bg-relay.quorum .rim { stroke: var(--bg-cyan); }
 .bg-relay.m-approved .rim { animation: bg-armed 3.6s ease-in-out infinite; }
+/* Event: this petition crossed its approval threshold. A release pulse runs to the
+ * dial, a bright arc sweeps the rim, the latch snaps and one wave leaves it, and one
+ * sweep runs around the panel. The aperture stays closed: only a verified retrieval
+ * in the requester's browser opens it. */
+.bg-relay.latching .rim { transform-box: fill-box; transform-origin: center; animation: bg-latch 0.45s cubic-bezier(0.2, 1.5, 0.35, 1) 1.05s; }
+.bg-relay .ap-sweep, .bg-relay .ap-wave { fill: none; opacity: 0; pointer-events: none; transform-box: fill-box; transform-origin: center; }
+.bg-relay .ap-sweep { stroke: #eaffff; stroke-width: 4; stroke-linecap: round; stroke-dasharray: 16 84; filter: drop-shadow(0 0 5px rgba(139, 238, 255, 0.95)); animation: bg-ap-sweep 0.6s cubic-bezier(0.45, 0.05, 0.3, 1) 0.5s backwards; }
+.bg-relay .ap-wave { stroke: rgba(139, 238, 255, 0.9); stroke-width: 3; animation: bg-ap-wave 0.55s ease-out 1.05s; }
 .bg-relay.m-released .rim, .bg-relay.m-opened .rim { stroke: var(--bg-warm); animation: none; }
 .bg-relay.m-expired .rim, .bg-relay.m-denied .rim, .bg-relay.m-invalidated .rim { stroke: #5a3a34; }
 .bg-relay .core { opacity: 0.18; transition: opacity 0.9s ease 0.3s; }
@@ -228,10 +285,15 @@
 
 /* Released item: revealed as the aperture opens. */
 .bg-released {
-  margin-top: 1rem; padding: 1rem 1.1rem; border: 1px solid rgba(255, 182, 72, 0.55); border-radius: 16px;
+  margin: 0 0 0.8rem; padding: 0.7rem 0.9rem 0.9rem; border: 1px solid rgba(255, 182, 72, 0.55); border-radius: 16px;
   background: linear-gradient(180deg, rgba(255, 182, 72, 0.1), rgba(255, 182, 72, 0.03));
   box-shadow: 0 20px 50px -30px rgba(255, 160, 60, 0.6);
 }
+.bg-released-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; margin-bottom: 0.5rem; }
+.bg-released-head h3 { margin: 0; font-size: 0.95rem; line-height: 1.3; }
+.bg-released-actions { display: flex; flex: none; gap: 0.45rem; }
+.bg-released-actions button { min-height: 2rem; padding: 0.25rem 0.75rem; }
+.bg-released > .small, .bg-released > .notice { margin: 0.6rem 0 0; }
 .is-open .bg-released { animation: bg-reveal 0.8s 0.55s cubic-bezier(0.2, 0.7, 0.2, 1) backwards; }
 .bg-released h3 { color: #ffe2b0; }
 .bg-released.closed { border-color: rgba(255, 138, 115, 0.45); background: rgba(255, 138, 115, 0.04); box-shadow: none; }
@@ -280,8 +342,13 @@
 
 @keyframes bg-fade { from { opacity: 0; } }
 @keyframes bg-rise { from { opacity: 0; transform: translateY(12px); } }
-@keyframes bg-pulse { 0% { stroke-dashoffset: 16; opacity: 1; } 85% { opacity: 1; } 100% { stroke-dashoffset: -100; opacity: 0; } }
-@keyframes bg-cell-on { from { fill: #0b2129; stroke: var(--bg-line); } 40% { fill: rgba(70, 215, 242, 0.35); stroke: #effdff; } }
+@keyframes bg-relay-pulse { 0% { stroke-dashoffset: 12; opacity: 1; } 85% { opacity: 1; } 100% { stroke-dashoffset: -100; opacity: 0; } }
+@keyframes bg-cell-snap { 0% { transform: scale(1.16); fill: rgba(70, 215, 242, 0.62); stroke: #f2feff; stroke-width: 2.5; } 100% { transform: none; } }
+@keyframes bg-cell-knock { from { stroke: #8beeff; } }
+@keyframes bg-latch { 0% { transform: scale(1.06); stroke: #f4feff; stroke-width: 5; } 100% { transform: none; } }
+@keyframes bg-ap-sweep { 0% { opacity: 0; transform: rotate(-90deg); } 15% { opacity: 1; } 85% { opacity: 1; } 100% { opacity: 0; transform: rotate(270deg); } }
+@keyframes bg-ap-wave { 0% { opacity: 0.95; transform: scale(0.96); } 100% { opacity: 0; transform: scale(1.2); } }
+@keyframes bg-sweep-once { 0% { opacity: 0; transform: rotate(-20deg); } 12% { opacity: 1; } 88% { opacity: 1; } 100% { opacity: 0; transform: rotate(340deg); } }
 @keyframes bg-armed { 0%, 100% { stroke-opacity: 1; } 50% { stroke-opacity: 0.55; } }
 @keyframes bg-reveal { from { opacity: 0; clip-path: inset(0 0 100% 0 round 16px); } to { clip-path: inset(0 0 0 0 round 16px); } }
 

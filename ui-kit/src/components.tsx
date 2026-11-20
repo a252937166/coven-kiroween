@@ -1,6 +1,7 @@
 // Shared React pieces for both apps. Layout and look belong to each app.
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type { Receipt, RecordEntry, ReceiptOutcome } from "@coven/core-ts/records";
 import { Api, ApiError } from "./api.ts";
 import { sessionLock, withSessionLock } from "./session.ts";
@@ -138,23 +139,179 @@ export function DemoClock(props: {
           {s.label}
         </button>
       ))}
-      <button
-        className="danger"
-        disabled={busy}
-        onClick={() => {
-          if (window.confirm("Reset the demo? This deletes all demo data and this browser's demo keys.")) {
-            run(async () => {
-              await resetDemo(props.api, props.ks);
-              window.location.reload();
-            });
-          }
-        }}
-      >
-        Reset demo
-      </button>
+      <ResetDemo api={props.api} ks={props.ks} disabled={busy} />
       <span className="visually-hidden">The demo clock speeds up waiting only; all cryptography runs for real.</span>
       <ErrorLine error={error} />
     </div>
+  );
+}
+
+const APP_NAME: Record<string, string> = { "last-light": "Last Light", "break-glass": "Break Glass" };
+const APP_DATA: Record<string, string> = {
+  "last-light": "vaults, letters, shares and recoveries",
+  "break-glass": "sealed items, petitions and approvals",
+};
+
+type DemoSpace = { private: boolean; idleDays?: number };
+
+/** Hosted: this browser has a private demo space. Local (or an older service): one shared demo. */
+function useDemoSpace(api: Api): DemoSpace {
+  const [space, setSpace] = useState<DemoSpace>({ private: false });
+  useEffect(() => {
+    let stale = false;
+    api.get<{ private: boolean; idle_days?: number }>("/api/demo/space").then(
+      (s) => {
+        if (!stale) setSpace({ private: s.private === true, idleDays: s.idle_days });
+      },
+      () => undefined,
+    );
+    return () => {
+      stale = true;
+    };
+  }, [api]);
+  return space;
+}
+
+/**
+ * Reset demo, confirmed in the app's own modal dialog instead of a native
+ * confirm. Opening and cancelling never reset anything. A press while a reset
+ * is pending is ignored, so one confirmation sends one reset. A failure stays
+ * visible in the dialog, which can then be retried or cancelled. The dialog is
+ * rendered at the end of <body>, outside the app and the printable card.
+ */
+function ResetDemo({ api, ks, disabled }: { api: Api; ks: KeyStore; disabled: boolean }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
+  const inFlight = useRef(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const titleId = useId();
+  const descId = useId();
+  const here = APP_NAME[api.app] ?? "this app's";
+  const space = useDemoSpace(api);
+
+  const open = () => {
+    const d = dialog.current;
+    if (!d || d.open) return;
+    setError(null);
+    d.showModal();
+    cancel.current?.focus(); // the safe choice has focus first
+  };
+  const close = () => {
+    if (!inFlight.current) dialog.current?.close();
+  };
+  const confirm = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      await resetDemo(api, ks);
+      window.location.reload(); // stays pending until the page reloads
+    } catch (e) {
+      inFlight.current = false;
+      setPending(false);
+      setError(errorText(e));
+    }
+  };
+
+  return (
+    <>
+      <button ref={trigger} className="danger" disabled={disabled} aria-haspopup="dialog" onClick={open}>
+        Reset demo
+      </button>
+      {createPortal(
+        <dialog
+          ref={dialog}
+          className="coven-dialog"
+          aria-labelledby={titleId}
+          aria-describedby={descId}
+          onCancel={(e) => {
+            if (inFlight.current) e.preventDefault(); // Escape cannot abandon a reset in flight
+          }}
+          onClose={() => {
+            setError(null);
+            trigger.current?.focus();
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) close(); // a click on the backdrop cancels
+          }}
+        >
+          <div className="coven-dialog-panel">
+            <div className="coven-dialog-head">
+              <span className="coven-dialog-icon" aria-hidden="true">
+                !
+              </span>
+              <div>
+                <p className="coven-dialog-kicker">Fictional demo</p>
+                <h2 id={titleId} className="coven-dialog-title">
+                  Reset the demo?
+                </h2>
+              </div>
+            </div>
+            <p id={descId} className="coven-dialog-desc">
+              {space.private ? (
+                <>
+                  This deletes the demo data in your private {here} demo space, which only this browser uses. Other people's demos are not
+                  affected. It also deletes the {here} demo keys stored in this browser.
+                </>
+              ) : (
+                <>
+                  This deletes the demo data of both apps, Last Light and Break Glass, on this demo service. It also deletes the {here} demo
+                  keys stored in this browser.
+                </>
+              )}
+            </p>
+            <ul className="coven-dialog-list">
+              {space.private ? (
+                <>
+                  <li>
+                    <b>{here}</b> <span>{APP_DATA[api.app]}</span>
+                  </li>
+                  <li>
+                    <b>Your space</b> <span>records, demo mail, enrolled keys, sign-ins and the demo clock</span>
+                  </li>
+                </>
+              ) : (
+                <>
+                  <li>
+                    <b>Last Light</b> <span>vaults, letters, shares and recoveries</span>
+                  </li>
+                  <li>
+                    <b>Break Glass</b> <span>sealed items, petitions and approvals</span>
+                  </li>
+                  <li>
+                    <b>Both apps</b> <span>records, demo mail, enrolled keys, sign-ins and the demo clock</span>
+                  </li>
+                </>
+              )}
+              <li>
+                <b>This browser</b> <span>{here} demo keys</span>
+              </li>
+            </ul>
+            <p className="coven-dialog-note">
+              Nothing is deleted until you confirm. After the reset, set up the demo again.
+              {space.private && space.idleDays ? ` A space nobody uses for ${space.idleDays} days is deleted.` : ""}
+            </p>
+            {error && (
+              <p className="coven-dialog-error" role="alert">
+                The reset did not finish: {error}
+              </p>
+            )}
+            <div className="coven-dialog-actions">
+              <button ref={cancel} type="button" className="coven-dialog-cancel" disabled={pending} onClick={close}>
+                Cancel
+              </button>
+              <button type="button" className="coven-dialog-confirm" disabled={pending} onClick={() => void confirm()}>
+                {pending ? "Resetting…" : "Reset all demo data"}
+              </button>
+            </div>
+          </div>
+        </dialog>,
+        document.body,
+      )}
+    </>
   );
 }
 
@@ -295,46 +452,80 @@ export function useSessionBusy(): boolean {
   return busy;
 }
 
-async function actualSession(api: Api): Promise<string | null> {
+/** The persona the session cookie holds; null when there is no session. Throws when the service cannot be reached. */
+async function readSession(api: Api): Promise<string | null> {
   try {
     return (await api.get<{ user: string }>("/api/session")).user;
-  } catch {
-    return null;
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) return null;
+    throw e;
   }
 }
 
 /**
  * Load personas for this app and keep a signed-in session. `me` is always the
  * persona the service reports for the session cookie, read back after every
- * sign-in, so the UI never claims a persona the cookie does not hold.
+ * sign-in, so the UI never claims a persona the cookie does not hold. When the
+ * session cannot be started or read back, `sessionError` says so and
+ * `retrySession` tries again; nothing role-scoped is shown meanwhile.
  */
 export function usePersonas(api: Api, app: string, fallback: string) {
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [me, setMe] = useState<string | null>(null);
   const [epoch, setEpoch] = useState(roleEpoch.n);
+  const [sessionError, setSessionError] = useState<string | null>(null);
   const pending = useSessionBusy();
   const meRef = useRef<string | null>(null);
   const settle = (user: string | null) => {
     meRef.current = user;
     setMe(user);
   };
+  /** Read the session back after a sign-in attempt; a failure is shown, never guessed. */
+  const readBack = async (refused?: unknown): Promise<string | null> => {
+    try {
+      const user = await readSession(api);
+      // When the service answered the sign-in with a refusal (for example a busy or full demo), say why.
+      if (user === null) setSessionError(refused instanceof ApiError ? errorText(refused) : "the service did not keep a demo session");
+      return user;
+    } catch (e) {
+      setSessionError(errorText(e));
+      return null;
+    }
+  };
 
-  useEffect(() => {
-    void withSessionLock(async () => {
+  const start = useCallback(async () => {
+    setSessionError(null);
+    try {
       const all = await api.get<Persona[]>("/api/personas");
       setPersonas(all.filter((p) => p.app === app));
-      let user = await actualSession(api);
+      let user = await readSession(api);
       if (user === null) {
+        let refused: unknown;
         try {
           await api.signIn(fallback);
-        } catch {
-          // ambiguous: the cookie may or may not have been set; read it back below
+        } catch (e) {
+          refused = e; // ambiguous: the cookie may or may not have been set; read it back below
         }
-        user = await actualSession(api);
+        user = await readBack(refused);
       }
       settle(user);
-    });
+    } catch (e) {
+      setSessionError(errorText(e));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, app, fallback]);
+
+  useEffect(() => {
+    void withSessionLock(start);
+  }, [start]);
+
+  const retrySession = useCallback(() => {
+    void withSessionLock(async () => {
+      roleEpoch.n += 1;
+      setEpoch(roleEpoch.n); // anything started before the failure is discarded
+      await start();
+    });
+  }, [start]);
 
   const switchTo = useCallback(
     async (id: string) => {
@@ -343,15 +534,18 @@ export function usePersonas(api: Api, app: string, fallback: string) {
         roleEpoch.n += 1;
         const e = roleEpoch.n;
         setEpoch(e); // remount role-scoped views now, before the network round trip
+        setSessionError(null);
+        let refused: unknown;
         try {
           await api.signIn(id);
-        } catch {
-          // ambiguous failure: confirm which session the cookie actually holds
+        } catch (err) {
+          refused = err; // ambiguous failure: confirm which session the cookie actually holds
         }
-        const user = await actualSession(api);
+        const user = await readBack(refused);
         if (isCurrentEpoch(e)) settle(user);
       });
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [api],
   );
 
@@ -364,14 +558,43 @@ export function usePersonas(api: Api, app: string, fallback: string) {
         try {
           return await fn();
         } finally {
-          settle(await actualSession(api));
+          settle(await readBack());
         }
       });
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [api],
   );
 
-  return { personas, me, switchTo, epoch, pending, runSignedInFlow };
+  return { personas, me, switchTo, epoch, pending, runSignedInFlow, sessionError, retrySession };
+}
+
+/** Shown while data for the signed-in persona is on its way. */
+export function Loading({ what }: { what: string }) {
+  return (
+    <p className="load-wait" role="status">
+      <span className="load-wait-dot" aria-hidden="true" />
+      Loading {what}…
+    </p>
+  );
+}
+
+/**
+ * A load that failed, with what failed and a way to try again. Data shown
+ * earlier (if any) stays on the page below it, marked as possibly out of date.
+ */
+export function LoadProblem({ what, error, onRetry, stale = false }: { what: string; error: string; onRetry: () => void; stale?: boolean }) {
+  return (
+    <div className="load-problem" role="alert">
+      <p className="load-problem-text">
+        <strong>Could not load {what}.</strong> {error}
+        {stale && " What is shown below may be out of date."}
+      </p>
+      <button type="button" onClick={onRetry}>
+        Try again
+      </button>
+    </div>
+  );
 }
 
 export function personaName(personas: Persona[], id: string) {

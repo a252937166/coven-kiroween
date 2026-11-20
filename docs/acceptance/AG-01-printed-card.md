@@ -2,7 +2,7 @@
 
 Source: [spec 05 requirements, AG-01](../../.kiro/specs/05-petition-lifecycle-and-binding/requirements.md) and the acceptance-evidence section of [guarantees.md](../../.kiro/steering/guarantees.md).
 
-Status: **passed** on 2026-11-08 (run-20261107, physical paper card). See "Result" below. A screen rehearsal is not a pass; this result used a share typed from paper.
+**Passed on November 20, 2026** with a paper card and matching encrypted bundle exported from the public Last Light site. The first physical run passed on November 8.
 
 ## What it proves
 
@@ -65,6 +65,12 @@ Steps 1 to 4 and 7 can be run with helper scripts. They write share values only 
 | Evidence gap | No redacted photo of the printed card has been provided. The photo is listed under "Evidence to keep" but is not part of the pass rule; it remains outstanding |
 
 AG-02 (clean public checkout of the submission commit) is a separate gate and is still pending.
+
+## November 20 public deployment result
+
+At 14:25:49 UTC the owner finished entering the word code from Bram’s printed card for the November 19 HTTPS export. The local helper checked the code against the issued card. Before sandboxing, the local control and the public deployment both returned HTTP 200. Inside the network-denied sandbox neither was reachable.
+
+The offline CLI rejected the paper share on its own (exit 1). With two additional matching trustee shares and the encrypted bundle, it recovered the expected family letter (exit 0). The scanner found zero matches for the 33 tested representations of the shares in the captured browser traffic, service log and configuration notes, or the encrypted bundle. The [deployment record](judge-hosting-2026-11-19.md) identifies the tested release.
 
 ## Pass rule
 

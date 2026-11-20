@@ -252,3 +252,198 @@ test("Last Light: one undecryptable contribution after release, a supplement, th
   assert.deepEqual(opened.used, ["user:ada", "user:bram", "user:dov"]);
   assert.ok((await mail(api)).some((m) => m.subject === "Another share was added"));
 });
+
+// ---------------------------------------------------------------------------
+// Setup and lost-answer recovery (review blockers). Each test starts from a reset.
+
+import { directory, ensureEnrolled, FlowError, resetDemo } from "../src/common.ts";
+import { longTermKey } from "../src/keystore.ts";
+import { bytesEqual } from "@coven/core-ts/bytes";
+
+/** An Api that loses chosen answers: "after" sends the request (it commits) and drops the answer; "before" never sends it. */
+class LossyApi extends Api {
+  drops: { method: string; path: RegExp; mode: "after" | "before"; times: number; skip?: number }[] = [];
+  override async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const d = this.drops.find((x) => x.times > 0 && x.method === method && x.path.test(path));
+    if (d && d.skip) {
+      d.skip--; // let the first matches through
+    } else if (d) {
+      d.times--;
+      if (d.mode === "after") await super.request(method, path, body).catch(() => undefined);
+      throw new TypeError(`answer lost (test): ${method} ${path}`);
+    }
+    return super.request<T>(method, path, body);
+  }
+}
+const lossy = (app: "break-glass" | "last-light") => ({ api: new LossyApi({ base, app, cookieJar: true }), ks: new MemoryKeyStore() });
+
+async function boundKeyOf(api: Api, user: string) {
+  return (await directory(api)).get(user);
+}
+
+test("Enrollment: a reset started from either app lets both apps seed again in the same browser", async () => {
+  const L = browser("last-light");
+  const B = browser("break-glass");
+  await L.api.post("/api/demo/reset");
+  await ll.setupDemo(L.api, L.ks);
+  await bg.setupDemo(B.api, B.ks);
+
+  // Reset from Last Light: the service forgets every enrollment, only Last Light's keys are cleared here.
+  await resetDemo(L.api, L.ks);
+  assert.ok(await longTermKey(B.ks, bg.ADMIN), "Break Glass keys survive a Last Light reset");
+  await bg.setupDemo(B.api, B.ks); // re-binds its kept keys instead of sealing to nobody
+  await B.api.signIn(bg.ADMIN);
+  const items = await bg.listItems(B.api);
+  assert.equal(bg.demoProgress(items).ready, true);
+  assert.ok(items.every((i) => i.seal_version_id), "every item sealed, aws-root included");
+  assert.ok(bytesEqual((await boundKeyOf(B.api, bg.ADMIN))!, (await longTermKey(B.ks, bg.ADMIN))!.publicKey));
+  await ll.setupDemo(L.api, L.ks);
+
+  // Reset from Break Glass: Last Light's kept keys are re-bound on its next setup.
+  await resetDemo(B.api, B.ks);
+  const vaultId = await ll.setupDemo(L.api, L.ks);
+  await L.api.signIn(ll.OWNER);
+  assert.equal(ll.demoProgress(await ll.vault(L.api, vaultId)).ready, true);
+  await bg.setupDemo(B.api, B.ks);
+  await B.api.signIn(bg.ADMIN);
+  assert.equal(bg.demoProgress(await bg.listItems(B.api)).ready, true);
+
+  // A different browser with no keys is refused, and the bound identity key is not replaced.
+  const other = browser("last-light");
+  const before = await boundKeyOf(L.api, ll.OWNER);
+  await assert.rejects(ll.setupDemo(other.api, other.ks), (e: unknown) => e instanceof FlowError && /does not hold/.test(e.message));
+  assert.ok(bytesEqual((await boundKeyOf(L.api, ll.OWNER))!, before!));
+});
+
+test("Enrollment: a lost answer keeps the local key, and the retry finds it bound", async () => {
+  const { api, ks } = lossy("break-glass");
+  await api.post("/api/demo/reset");
+  const DIRECTORY = /^\/api\/directory$/;
+  const ENROLL = /^\/api\/enroll$/;
+
+  // Answer lost after it committed: the read-back finds this browser's key bound.
+  await api.signIn("user:sage");
+  api.drops.push({ method: "POST", path: ENROLL, mode: "after", times: 1 });
+  const sage = await ensureEnrolled(api, ks, "user:sage");
+  assert.ok(bytesEqual((await boundKeyOf(api, "user:sage"))!, sage.publicKey));
+
+  // Answer and read-back both lost: the call fails, the local half stays, the retry reconciles.
+  await api.signIn("user:rowan");
+  api.drops.push({ method: "POST", path: ENROLL, mode: "after", times: 1 });
+  api.drops.push({ method: "GET", path: DIRECTORY, mode: "before", times: 1, skip: 1 });
+  await assert.rejects(ensureEnrolled(api, ks, "user:rowan"), TypeError);
+  const rowan = await longTermKey(ks, "user:rowan");
+  assert.ok(rowan, "the local half is kept after an ambiguous failure");
+  const again = await ensureEnrolled(api, ks, "user:rowan");
+  assert.ok(bytesEqual(again.publicKey, rowan!.publicKey));
+  assert.ok(bytesEqual((await boundKeyOf(api, "user:rowan"))!, rowan!.publicKey));
+
+  // Lost before it was sent: the retry binds the same kept key.
+  await api.signIn("user:ash");
+  api.drops.push({ method: "POST", path: ENROLL, mode: "before", times: 1 });
+  await assert.rejects(ensureEnrolled(api, ks, "user:ash"), TypeError);
+  const ash = await longTermKey(ks, "user:ash");
+  assert.ok(ash);
+  assert.equal(await boundKeyOf(api, "user:ash"), undefined);
+  await ensureEnrolled(api, ks, "user:ash");
+  assert.ok(bytesEqual((await boundKeyOf(api, "user:ash"))!, ash!.publicKey));
+});
+
+test("Setup: an interrupted run resumes without duplicate vaults, letters, items or seals", async () => {
+  // Last Light: the vault is created, then a letter's answer is lost after it committed.
+  const L = lossy("last-light");
+  await L.api.post("/api/demo/reset");
+  L.api.drops.push({ method: "POST", path: /^\/api\/ll\/vaults\/[^/]+\/items$/, mode: "after", times: 1 });
+  await assert.rejects(ll.setupDemo(L.api, L.ks), TypeError);
+  await L.api.signIn(ll.OWNER);
+  let vaults = await ll.listVaults(L.api);
+  assert.equal(vaults.length, 1);
+  assert.equal(ll.demoProgress(vaults[0]).ready, false, "a partial vault is not ready");
+  await ll.setupDemo(L.api, L.ks);
+  await ll.setupDemo(L.api, L.ks); // running it again changes nothing
+  vaults = await ll.listVaults(L.api);
+  assert.equal(vaults.length, 1, "one vault");
+  assert.deepEqual(vaults[0].items.map((i) => i.label).sort(), ll.DEMO_ITEMS.map((i) => i.label).sort());
+
+  // Last Light: the vault's own answer is lost after it committed.
+  await L.api.post("/api/demo/reset");
+  await L.ks.clear();
+  L.api.drops.push({ method: "POST", path: /^\/api\/ll\/vaults$/, mode: "after", times: 1 });
+  await assert.rejects(ll.setupDemo(L.api, L.ks), TypeError);
+  await ll.setupDemo(L.api, L.ks);
+  await L.api.signIn(ll.OWNER);
+  vaults = await ll.listVaults(L.api);
+  assert.equal(vaults.length, 1);
+  assert.equal(ll.demoProgress(vaults[0]).ready, true);
+
+  // Break Glass: aws-root is sealed but the answer is lost; the retry keeps that version.
+  const B = lossy("break-glass");
+  await B.api.post("/api/demo/reset");
+  B.api.drops.push({ method: "POST", path: /^\/api\/bg\/items\/aws-root\/seal-versions$/, mode: "after", times: 1 });
+  await assert.rejects(bg.setupDemo(B.api, B.ks), TypeError);
+  await B.api.signIn(bg.ADMIN);
+  const partial = await bg.listItems(B.api);
+  assert.equal(bg.demoProgress(partial).ready, false);
+  const v1 = partial.find((i) => i.item_id === "aws-root")!.seal_version_id;
+  assert.ok(v1);
+  await bg.setupDemo(B.api, B.ks);
+  await B.api.signIn(bg.ADMIN);
+  const done = await bg.listItems(B.api);
+  assert.equal(bg.demoProgress(done).ready, true);
+  assert.equal(done.length, bg.DEMO_ITEMS.length, "no duplicate items");
+  assert.equal(done.find((i) => i.item_id === "aws-root")!.seal_version_id, v1, "not resealed");
+});
+
+test("Lost answers: a recovery or petition opened while its answer was lost is adopted by its one-time key", async () => {
+  // Last Light first.
+  const L = lossy("last-light");
+  await L.api.post("/api/demo/reset");
+  const vaultId = await ll.setupDemo(L.api, L.ks);
+  await advanceClock(L.api, 48 * 86400);
+  await L.api.signIn("user:ada");
+  L.api.drops.push({ method: "POST", path: /\/recoveries$/, mode: "after", times: 1 });
+  let status = await ll.beginRecovery(L.api, L.ks, "user:ada", vaultId); // read back and adopted
+  const rid = status.recovery!.recovery_id;
+  assert.equal(status.recovery!.recoverer_id, "user:ada");
+  assert.equal(await ll.hasRecoveryKey(L.ks, rid), true);
+  for (const t of ["user:ada", "user:bram", "user:cleo"]) {
+    await L.api.signIn(t);
+    await ll.submitShare(L.api, L.ks, t, await ll.vault(L.api, vaultId));
+  }
+  await L.api.signIn("user:ada");
+  const opened = await ll.completeRecovery(L.api, L.ks, rid);
+  assert.match(opened.items[0].body!, /blue pumpkin/);
+
+  // The answer and the read-back are both lost: the next load adopts it.
+  await L.api.post("/api/demo/reset");
+  await L.ks.clear();
+  const v2 = await ll.setupDemo(L.api, L.ks);
+  await advanceClock(L.api, 48 * 86400);
+  await L.api.signIn("user:bram");
+  L.api.drops.push({ method: "POST", path: /\/recoveries$/, mode: "after", times: 1 });
+  L.api.drops.push({ method: "GET", path: new RegExp(`^/api/ll/vaults/${v2}$`), mode: "before", times: 1, skip: 1 });
+  await assert.rejects(ll.beginRecovery(L.api, L.ks, "user:bram", v2));
+  status = await ll.vault(L.api, v2);
+  assert.equal(status.recovery?.recoverer_id, "user:bram", "the recovery committed");
+  assert.equal(await ll.reconcileRecovery(L.ks, "user:bram", status), true);
+  assert.equal(await ll.hasRecoveryKey(L.ks, status.recovery!.recovery_id), true);
+  // Another trustee's view never adopts it.
+  assert.equal(await ll.reconcileRecovery(L.ks, "user:dov", status), false);
+
+  // Break Glass.
+  const B = lossy("break-glass");
+  await B.api.post("/api/demo/reset");
+  await bg.setupDemo(B.api, B.ks);
+  await B.api.signIn("user:robin");
+  B.api.drops.push({ method: "POST", path: /^\/api\/bg\/petitions$/, mode: "after", times: 1 });
+  const p = await bg.openPetition(B.api, B.ks, "user:robin", "registrar-codes", "Lost answer (fictional)", 900);
+  assert.equal(await bg.hasLocalKey(B.ks, p.petition_id), true);
+  assert.equal((await bg.listPetitions(B.api)).length, 1, "no duplicate petition");
+  for (const a of ["user:ash", "user:wren"]) {
+    await B.api.signIn(a);
+    await bg.approvePetition(B.api, B.ks, a, p.petition_id);
+  }
+  await B.api.signIn("user:robin");
+  const r = await bg.retrieve(B.api, B.ks, p.petition_id);
+  assert.match(r.secret, /8F2K-QX7M/);
+});

@@ -266,9 +266,114 @@ def test_t15_rotation_follow_up(env):
     items = {i["item_id"]: i for i in robin.get("/api/bg/items").json()}
     assert items["aws-root"]["rotation_state"] == "rotation_required"
     assert robin.post("/api/bg/items/aws-root/rotation-confirmed").json()["rotation_state"] == "rotated"
-    assert robin.post("/api/bg/items/aws-root/rotation-confirmed").status_code == 409
+    # The obligation is closed: Robin's old release no longer qualifies; the admin sees "not required".
+    assert robin.post("/api/bg/items/aws-root/rotation-confirmed").status_code == 403
+    assert env["as"]("user:quinn").post("/api/bg/items/aws-root/rotation-confirmed").status_code == 409
     for word in ("revoke", "destroy"):
         assert word not in rel["retrieval_notice"].lower()
+
+
+# --- GR-ROT: who may record a rotation -------------------------------------
+
+
+def release_to(env, requester: str = "user:robin", item_id: str = "aws-root") -> str:
+    pid = open_petition(env, requester=requester, item_id=item_id)["petition_id"]
+    approve(env, "user:sage", pid)
+    approve(env, "user:rowan", pid)
+    assert env["as"](requester).get(f"/api/bg/petitions/{pid}/release").status_code == 200
+    return pid
+
+
+def rotation_snapshot(env, item_id: str = "aws-root"):
+    """Rotation state of the item, plus the record chain's receipt and full entries."""
+    quinn = env["as"]("user:quinn")
+    items = {i["item_id"]: i for i in quinn.get("/api/bg/items").json()}
+    recs = quinn.get("/api/records/bg").json()
+    return items[item_id]["rotation_state"], recs["receipt"], recs["entries"]
+
+
+def confirm(env, who: str, item_id: str = "aws-root"):
+    return env["as"](who).post(f"/api/bg/items/{item_id}/rotation-confirmed")
+
+
+@pytest.mark.parametrize("who", ["user:quinn", "user:robin"])
+def test_rotation_recorded_by_admin_or_the_releases_requester(env, who):
+    seal(env)
+    pid = release_to(env)
+    assert env["as"]("user:robin").get(f"/api/bg/petitions/{pid}").json()["rotation_owed"] is True
+    r = confirm(env, who)
+    assert r.status_code == 200, r.text
+    assert r.json()["rotation_state"] == "rotated"
+    state, _, entries = rotation_snapshot(env)
+    assert state == "rotated"
+    assert entries[-1]["type"] == "rotation.confirmed"
+    assert entries[-1]["data"] == {"item": "aws-root", "by": who}
+    assert env["as"]("user:robin").get(f"/api/bg/petitions/{pid}").json()["rotation_owed"] is False
+
+
+@pytest.mark.parametrize("who", ["user:sage", "user:ash", "user:kit"])
+def test_rotation_refused_for_approver_or_unrelated_actor(env, who):
+    """Approvers (one approved, one did not) and an engineer with no release are refused,
+    and neither the rotation state nor the record chain changes."""
+    seal(env)
+    release_to(env)
+    before = rotation_snapshot(env)
+    r = confirm(env, who)
+    assert r.status_code == 403
+    assert r.json()["error"] == "not_rotation_party"
+    assert rotation_snapshot(env) == before
+    assert before[0] == "rotation_required"
+
+
+def test_rotation_refused_for_an_earlier_closed_obligation(env):
+    """Robin's release was already rotated. Kit's later release opens a new obligation: only Kit and the admin qualify."""
+    seal(env)
+    robin_pid = release_to(env, "user:robin")
+    assert confirm(env, "user:robin").status_code == 200
+    kit_pid = release_to(env, "user:kit")
+    assert env["as"]("user:robin").get(f"/api/bg/petitions/{robin_pid}").json()["rotation_owed"] is False
+    assert env["as"]("user:kit").get(f"/api/bg/petitions/{kit_pid}").json()["rotation_owed"] is True
+    before = rotation_snapshot(env)
+    assert confirm(env, "user:robin").status_code == 403
+    assert rotation_snapshot(env) == before
+    assert confirm(env, "user:kit").status_code == 200
+
+
+def test_rotation_refused_after_reseal_for_an_old_version_release(env):
+    """A release of the previous seal version does not qualify for an obligation on the new version."""
+    seal(env)
+    release_to(env, "user:robin")
+    seal(env)  # reseal: new version, obligation cleared
+    assert rotation_snapshot(env)[0] == "none"
+    release_to(env, "user:kit")
+    before = rotation_snapshot(env)
+    assert confirm(env, "user:robin").status_code == 403
+    assert rotation_snapshot(env) == before
+    assert confirm(env, "user:kit").status_code == 200
+
+
+def test_rotation_refused_for_a_release_of_another_item(env):
+    seal(env, "aws-root")
+    seal(env, "registrar-codes")
+    release_to(env, "user:robin", "registrar-codes")
+    release_to(env, "user:kit", "aws-root")
+    before = rotation_snapshot(env, "aws-root")
+    assert confirm(env, "user:robin", "aws-root").status_code == 403
+    assert rotation_snapshot(env, "aws-root") == before
+    assert confirm(env, "user:robin", "registrar-codes").status_code == 200
+    assert rotation_snapshot(env, "aws-root")[0] == "rotation_required"
+
+
+def test_rotation_refused_for_an_approved_but_unreleased_petition(env):
+    """Holding an approved petition is not a release: nothing was served, nothing is owed."""
+    seal(env)
+    release_to(env, "user:kit")
+    pid = open_petition(env, requester="user:robin")["petition_id"]
+    approve(env, "user:sage", pid)
+    approve(env, "user:rowan", pid)
+    before = rotation_snapshot(env)
+    assert confirm(env, "user:robin").status_code == 403
+    assert rotation_snapshot(env) == before
 
 
 def test_validation_errors_do_not_echo_input(env):

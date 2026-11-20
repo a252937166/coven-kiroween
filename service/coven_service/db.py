@@ -10,9 +10,7 @@ import sqlite3
 from contextlib import contextmanager
 from typing import Iterator
 
-SCHEMA = """
-PRAGMA journal_mode = WAL;
-
+TABLES = """
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -102,11 +100,24 @@ BEFORE UPDATE OF recovery_id, vault_id, recoverer_id, public_key, fingerprint, c
 BEGIN SELECT RAISE(ABORT, 'recovery bindings are write-once'); END;
 """
 
+# The shared local database (one file for everyone, as in local demos).
+SCHEMA = "PRAGMA journal_mode = WAL;\n" + TABLES
 
-def connect(path: str) -> sqlite3.Connection:
+# Every table a demo reset empties, in an order that never leaves dangling rows.
+DEMO_TABLES = (
+    "sessions", "enrolled_keys", "records", "mail", "bg_approvals", "bg_petitions",
+    "bg_approver_shares", "bg_seal_versions", "bg_items", "ll_recovery_shares",
+    "ll_recoveries", "ll_items", "ll_trustee_shares", "ll_vaults", "settings",
+)
+
+# Private demo spaces (hosted mode) use fixed 4 KiB pages, so a page budget is a byte budget.
+SPACE_PAGE_SIZE = 4096
+
+
+def connect(path: str, uri: bool = False) -> sqlite3.Connection:
     # One connection per request. FastAPI may run that request's dependencies on
     # different worker threads, one after another, so allow cross-thread use.
-    conn = sqlite3.connect(path, isolation_level=None, timeout=10, check_same_thread=False)
+    conn = sqlite3.connect(path, isolation_level=None, timeout=10, check_same_thread=False, uri=uri)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 10000")
     conn.execute("PRAGMA foreign_keys = ON")
@@ -119,6 +130,25 @@ def init(path: str) -> None:
         conn.executescript(SCHEMA)
     finally:
         conn.close()
+
+
+def init_space(path: str) -> None:
+    """A new private demo space: the same tables in its own file. A rollback
+    journal (not WAL) keeps each space to one file on disk between writes."""
+    conn = connect(path)
+    try:
+        conn.execute(f"PRAGMA page_size = {SPACE_PAGE_SIZE}")
+        conn.execute("PRAGMA journal_mode = DELETE")
+        conn.executescript(TABLES)
+    finally:
+        conn.close()
+
+
+def empty_demo_tables(conn: sqlite3.Connection) -> None:
+    """Demo reset: delete every row of demo data, sessions and the demo clock."""
+    with tx(conn):
+        for t in DEMO_TABLES:
+            conn.execute(f"DELETE FROM {t}")
 
 
 @contextmanager
@@ -136,7 +166,9 @@ def tx(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
         conn.execute("COMMIT")
         raise
     except BaseException:
-        conn.execute("ROLLBACK")
+        # Some errors (a full database) already ended the transaction in SQLite.
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
         raise
     else:
         conn.execute("COMMIT")

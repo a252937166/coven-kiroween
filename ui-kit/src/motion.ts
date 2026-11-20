@@ -2,7 +2,29 @@
 // app already received from the service or from local verification. None of
 // them starts motion on first render, so an animation never invents a change.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
+
+/**
+ * For decorative loops only: true while `ref`'s element is on screen and the
+ * page is visible, so a loop can pause offscreen or in a hidden tab.
+ */
+export function useInView<T extends Element>(ref: RefObject<T | null>): boolean {
+  const [onScreen, setOnScreen] = useState(true);
+  const [shown, setShown] = useState(() => typeof document === "undefined" || document.visibilityState !== "hidden");
+  useEffect(() => {
+    const onChange = () => setShown(document.visibilityState !== "hidden");
+    document.addEventListener("visibilitychange", onChange);
+    return () => document.removeEventListener("visibilitychange", onChange);
+  }, []);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver((entries) => setOnScreen(entries.some((e) => e.isIntersecting)));
+    io.observe(el);
+    return () => io.disconnect();
+  }, [ref]);
+  return onScreen && shown;
+}
 
 /**
  * True for `ms` after `value` changes in a way `qualifies(prev, next)` accepts.

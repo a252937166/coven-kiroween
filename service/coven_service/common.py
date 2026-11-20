@@ -22,6 +22,10 @@ class Clock:
     def __init__(self, base=time.time):
         self._base = base
 
+    def wall(self) -> float:
+        """Real time, without any demo offset. Used for limits that no demo control may move."""
+        return self._base()
+
     def offset(self, conn: sqlite3.Connection) -> int:
         row = conn.execute("SELECT value FROM settings WHERE key = 'clock_offset'").fetchone()
         return int(row["value"]) if row else 0

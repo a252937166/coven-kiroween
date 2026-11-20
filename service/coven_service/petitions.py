@@ -186,9 +186,63 @@ def list_items(conn) -> list[dict]:
     return out
 
 
+def _owed_releases(conn, item: sqlite3.Row) -> set[str]:
+    """Petitions whose first release opened the item's current rotation obligation.
+
+    Walks the record chain backwards from its head. Releases of the current seal
+    version count until the obligation was last closed: a recorded rotation for
+    this item, or a new seal version (a reseal clears the obligation). Ordering
+    comes from the chain's sequence numbers, not timestamps, so two events in the
+    same second keep their order.
+    """
+    if item["rotation_state"] != "rotation_required":
+        return set()
+    owed: set[str] = set()
+    rows = conn.execute("SELECT type, data FROM records WHERE chain = ? ORDER BY seq DESC", (CHAIN,)).fetchall()
+    for r in rows:
+        if r["type"] not in ("petition.released", "rotation.confirmed", "seal.activated"):
+            continue
+        d = json.loads(r["data"])
+        if d.get("item") != item["item_id"]:
+            continue
+        if r["type"] != "petition.released":
+            break
+        if d.get("seal_version") == item["current_seal_version_id"]:
+            owed.add(d["petition"])
+    if not owed:
+        return owed
+    marks = ",".join("?" * len(owed))
+    # Cross-check against the petitions table: same item, same current version, really released.
+    return {
+        x["petition_id"]
+        for x in conn.execute(
+            f"SELECT petition_id FROM bg_petitions WHERE petition_id IN ({marks}) AND item_id = ? "
+            "AND seal_version_id = ? AND first_released_at IS NOT NULL",
+            (*owed, item["item_id"], item["current_seal_version_id"]),
+        ).fetchall()
+    }
+
+
+def _rotation_parties(conn, item: sqlite3.Row) -> set[str]:
+    """Who may record the current rotation: the item admin, and each requester of an owed release."""
+    owed = _owed_releases(conn, item)
+    parties = {item["admin_id"]}
+    if owed:
+        marks = ",".join("?" * len(owed))
+        parties |= {
+            x["requester_id"]
+            for x in conn.execute(f"SELECT requester_id FROM bg_petitions WHERE petition_id IN ({marks})", tuple(owed)).fetchall()
+        }
+    return parties
+
+
 def confirm_rotation(conn, now: int, caller: str, item_id: str) -> dict:
-    """GR-ROT: a teammate confirms the credential was rotated where it was issued."""
+    """GR-ROT: the item admin, or the requester of a release that made the current
+    rotation necessary, confirms it was rotated where it was issued. Anyone else is
+    refused before any state or record changes."""
     item = _item(conn, item_id)
+    if caller not in _rotation_parties(conn, item):
+        raise Rejected(403, "not_rotation_party")
     if item["rotation_state"] != "rotation_required":
         raise Rejected(409, "rotation_not_required")
     conn.execute("UPDATE bg_items SET rotation_state = 'rotated' WHERE item_id = ?", (item_id,))
@@ -279,6 +333,9 @@ def status(conn, now: int, caller: str, petition_id: str) -> dict:
         "expires_at": iso(p["expires_at"]),
         "server_now": iso(now),
         "rotation_state": item["rotation_state"],
+        # True when this petition's release opened the item's current rotation obligation,
+        # so its requester may record the rotation.
+        "rotation_owed": p["petition_id"] in _owed_releases(conn, item),
         "retrieval_notice": ROTATION_COPY.format(expires_at=iso(p["expires_at"])),
     }
 

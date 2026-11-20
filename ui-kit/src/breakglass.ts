@@ -1,13 +1,26 @@
 // Break Glass client flows (spec 05). Every key, share and plaintext stays in
 // the calling browser; the service receives public keys and ciphertext only.
 
-import { fromBase64, toBase64 } from "@coven/core-ts/bytes";
+import { bytesEqual, fromBase64, toBase64 } from "@coven/core-ts/bytes";
 import { openApproverShare, sealApproval, sealApproverShare } from "@coven/core-ts/envelope";
 import { exportRawPublicKey, generateEphemeralKeyPair } from "@coven/core-ts/keys";
 import { openRelease, type LocalPetition, type ReleasePackage } from "@coven/core-ts/release";
 import { sealCredential } from "@coven/core-ts/vault";
 import { ApiError, type Api } from "./api.ts";
-import { checkedFingerprint, directory, ensureEnrolled, ensureLive, FlowError, requireKey, type Guard } from "./common.ts";
+import {
+  checkedFingerprint,
+  definitelyRejected,
+  directory,
+  dropPending,
+  ensureEnrolled,
+  ensureLive,
+  findPending,
+  FlowError,
+  keepPending,
+  requireKey,
+  StaleFlowError,
+  type Guard,
+} from "./common.ts";
 import type { KeyStore } from "./keystore.ts";
 
 export interface BgItem {
@@ -41,6 +54,8 @@ export interface PetitionStatus {
   expires_at: string;
   server_now: string;
   rotation_state: string;
+  /** This petition's release opened the item's current rotation obligation (its requester may record the rotation). */
+  rotation_owed: boolean;
   retrieval_notice: string;
 }
 
@@ -77,7 +92,18 @@ export async function sealItem(api: Api, itemId: string, plaintext: string, appr
   });
 }
 
-/** Enroll every fictional persona in this browser, then seal the demo items as Quinn. */
+/** How far demo setup got. Ready only when every demo item exists and has a sealed version. */
+export function demoProgress(items: BgItem[]): { sealed: number; total: number; ready: boolean } {
+  const sealed = DEMO_ITEMS.filter((d) => items.some((i) => i.item_id === d.item_id && i.seal_version_id)).length;
+  return { sealed, total: DEMO_ITEMS.length, ready: sealed === DEMO_ITEMS.length };
+}
+
+/**
+ * Enroll every fictional persona in this browser, then seal the demo items as Quinn.
+ * Resumable: an interrupted run (or one whose answer was lost) is finished by
+ * running it again. It creates only missing items and seals only unsealed
+ * ones, so a retry never duplicates an item or reseals a sealed one.
+ */
 export async function setupDemo(api: Api, ks: KeyStore, onStep: (s: string) => void = () => {}) {
   for (const u of [ADMIN, ...APPROVERS, ...ENGINEERS]) {
     await api.signIn(u);
@@ -85,8 +111,21 @@ export async function setupDemo(api: Api, ks: KeyStore, onStep: (s: string) => v
     onStep(`Enrolled ${u}`);
   }
   await api.signIn(ADMIN);
+  const existing = new Map((await listItems(api)).map((i) => [i.item_id, i]));
   for (const it of DEMO_ITEMS) {
-    await api.post("/api/bg/items", { item_id: it.item_id, name: it.name });
+    const row = existing.get(it.item_id);
+    if (row && row.admin_id !== ADMIN) throw new FlowError(`${it.item_id} belongs to another admin; use "Reset demo"`);
+    if (!row) {
+      try {
+        await api.post("/api/bg/items", { item_id: it.item_id, name: it.name });
+      } catch (e) {
+        if (!(e instanceof ApiError && e.code === "item_exists")) throw e;
+      }
+    }
+    if (row?.seal_version_id) {
+      onStep(`Already sealed: ${it.name}`);
+      continue;
+    }
     await sealItem(api, it.item_id, it.secret, APPROVERS, 2);
     onStep(`Sealed ${it.name}`);
   }
@@ -104,18 +143,74 @@ export function petition(api: Api, pid: string) {
   return api.get<PetitionStatus>(`/api/bg/petitions/${pid}`);
 }
 
-/** Requester: generate a non-extractable ephemeral key for this petition and keep it locally. */
+const pendingPetitionSlot = (me: string, itemId: string) => `petition-pending:${me}:${itemId}`;
+
+/**
+ * Adopt petitions the service bound to one-time keys made in this browser,
+ * when the answer to the open request was lost. Each must be this requester's
+ * own Open or Approved petition, and its listed public key must equal a key
+ * kept for that same item. Returns the adopted petition IDs.
+ */
+export async function reconcilePetitions(ks: KeyStore, me: string, listed: PetitionStatus[]): Promise<string[]> {
+  const adopted: string[] = [];
+  for (const s of listed) {
+    if (s.requester_id !== me || (s.state !== "Open" && s.state !== "Approved")) continue;
+    if (await hasLocalKey(ks, s.petition_id)) continue;
+    const slot = pendingPetitionSlot(me, s.item_id);
+    if (!(await ks.get(slot))) continue;
+    const { raw } = await checkedFingerprint(s.requester_public_key, s.fingerprint);
+    const hit = await findPending(ks, slot, raw);
+    if (!hit) continue;
+    const local: LocalPetition = {
+      petitionId: s.petition_id,
+      itemId: s.item_id,
+      sealVersionId: s.seal_version_id,
+      requesterId: me,
+      publicKey: hit.publicKey,
+      privateKey: hit.privateKey,
+    };
+    await ks.put(`petition:${s.petition_id}`, local);
+    await dropPending(ks, slot, hit.publicKey);
+    adopted.push(s.petition_id);
+  }
+  return adopted;
+}
+
+/**
+ * Requester: generate a non-extractable ephemeral key for this petition and keep it locally.
+ * The key is stored before the request, so if the service commits but the
+ * answer is lost, a read-back (now, or on the next load) adopts the petition.
+ */
 export async function openPetition(api: Api, ks: KeyStore, me: string, itemId: string, reason: string, windowSeconds: number, guard?: Guard) {
   const pair = await generateEphemeralKeyPair();
   const publicKey = await exportRawPublicKey(pair.publicKey);
+  const slot = pendingPetitionSlot(me, itemId);
+  await keepPending(ks, slot, { publicKey, privateKey: pair.privateKey });
   ensureLive(guard);
-  const status = await api.post<PetitionStatus>("/api/bg/petitions", {
-    item_id: itemId,
-    reason,
-    requested_window_seconds: windowSeconds,
-    requester_public_key: toBase64(publicKey),
-  });
+  let status: PetitionStatus;
+  try {
+    status = await api.post<PetitionStatus>("/api/bg/petitions", {
+      item_id: itemId,
+      reason,
+      requested_window_seconds: windowSeconds,
+      requester_public_key: toBase64(publicKey),
+    });
+  } catch (e) {
+    if (definitelyRejected(e)) {
+      await dropPending(ks, slot, publicKey); // the service refused; this key was never bound
+      throw e;
+    }
+    if (e instanceof StaleFlowError || (guard && !guard())) throw e;
+    const listed = await listPetitions(api).catch(() => null);
+    if (listed) {
+      await reconcilePetitions(ks, me, listed);
+      const mine = listed.find((s) => s.requester_id === me && s.item_id === itemId && bytesEqual(fromBase64(s.requester_public_key), publicKey));
+      if (mine && (await hasLocalKey(ks, mine.petition_id))) return mine;
+    }
+    throw e; // still ambiguous: the key stays here, and the next load can adopt it
+  }
   if (status.requester_id !== me || status.item_id !== itemId) throw new FlowError("service bound a different requester or item");
+  if (!bytesEqual(fromBase64(status.requester_public_key), publicKey)) throw new FlowError("service bound a different key to this petition; refusing");
   const local: LocalPetition = {
     petitionId: status.petition_id,
     itemId,
@@ -125,6 +220,7 @@ export async function openPetition(api: Api, ks: KeyStore, me: string, itemId: s
     privateKey: pair.privateKey,
   };
   await ks.put(`petition:${status.petition_id}`, local);
+  await dropPending(ks, slot, publicKey);
   return status;
 }
 
@@ -181,7 +277,15 @@ export async function retrieve(api: Api, ks: KeyStore, pid: string, guard?: Guar
   ensureLive(guard);
   const secret = await openRelease(local, pkg);
   await ks.delete(`petition:${pid}`);
+  // Local evidence only (no material): this browser opened the petition, so later
+  // views can say so instead of guessing why the key is gone.
+  await ks.put(`petition-opened:${pid}`, true);
   return { secret, notice: pkg.retrieval_notice, expiresAt: pkg.expires_at };
+}
+
+/** True when this browser decrypted the petition earlier (and then deleted its key). */
+export async function openedHere(ks: KeyStore, pid: string) {
+  return (await ks.get(`petition-opened:${pid}`)) !== undefined;
 }
 
 /**

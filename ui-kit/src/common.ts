@@ -41,21 +41,72 @@ export function ensureLive(guard: Guard | undefined) {
   if (guard && !guard()) throw new StaleFlowError();
 }
 
-/** Make sure this browser holds a key for `user` and the service has bound its public half. */
+/** The public key the service has bound to `user`, or null when there is none. */
+async function boundKey(api: Api, user: string): Promise<Uint8Array | null> {
+  const row = (await api.get<DirectoryEntry[]>("/api/directory")).find((r) => r.account_id === user);
+  return row ? fromBase64(row.public_key) : null;
+}
+
+const HELD_ELSEWHERE = (user: string) => `${user} is enrolled with a key this browser does not hold. Use "Reset demo".`;
+
+/**
+ * Make sure this browser holds a key for `user` and the service has bound its
+ * public half. Reconciles with the service's directory every time:
+ * - the same key on both sides: done;
+ * - the service holds no key (for example after a demo reset started from the
+ *   other app, which clears only that app's browser keys): bind this browser's key;
+ * - the service holds a different key: refuse. A bound identity key is never replaced.
+ * A new key is stored here before it is sent. If the answer is lost, the key
+ * stays, so the next attempt finds it bound (or binds it) instead of stranding it.
+ */
 export async function ensureEnrolled(api: Api, ks: KeyStore, user: string): Promise<LongTermKey> {
-  const existing = await longTermKey(ks, user);
-  if (existing) return existing;
-  const key = await createLongTermKey(ks, user);
+  const local = await longTermKey(ks, user);
+  const bound = await boundKey(api, user);
+  if (bound) {
+    if (local && bytesEqual(local.publicKey, bound)) return local;
+    throw new FlowError(HELD_ELSEWHERE(user));
+  }
+  const key = local ?? (await createLongTermKey(ks, user));
   try {
     await api.post("/api/enroll", { public_key: toBase64(key.publicKey) });
   } catch (e) {
-    await ks.delete(`lt:${user}`);
-    if (e instanceof ApiError && e.code === "already_enrolled") {
-      throw new FlowError(`${user} is enrolled with a key this browser does not hold. Use "Reset demo".`);
-    }
-    throw e;
+    // The request may have been bound anyway, or raced another tab: read back.
+    const now = await boundKey(api, user).catch(() => undefined);
+    if (now && bytesEqual(now, key.publicKey)) return key;
+    if (now || (e instanceof ApiError && e.code === "already_enrolled")) throw new FlowError(HELD_ELSEWHERE(user));
+    throw e; // ambiguous: the key stays here for the next attempt
   }
   return key;
+}
+
+/** A one-time key pair, stored before the request that binds its public half. */
+export interface PendingKey {
+  publicKey: Uint8Array;
+  privateKey: CryptoKey;
+}
+
+const MAX_PENDING = 4;
+
+/** Keep a pending key in `slot` before its public half is sent. */
+export async function keepPending(ks: KeyStore, slot: string, key: PendingKey): Promise<void> {
+  const list = (await ks.get<PendingKey[]>(slot)) ?? [];
+  await ks.put(slot, [...list.slice(-(MAX_PENDING - 1)), key]);
+}
+
+/** The pending key in `slot` whose public half is `publicKey`, if this browser made it. */
+export async function findPending(ks: KeyStore, slot: string, publicKey: Uint8Array): Promise<PendingKey | undefined> {
+  return ((await ks.get<PendingKey[]>(slot)) ?? []).find((k) => bytesEqual(k.publicKey, publicKey));
+}
+
+export async function dropPending(ks: KeyStore, slot: string, publicKey: Uint8Array): Promise<void> {
+  const rest = ((await ks.get<PendingKey[]>(slot)) ?? []).filter((k) => !bytesEqual(k.publicKey, publicKey));
+  if (rest.length > 0) await ks.put(slot, rest);
+  else await ks.delete(slot);
+}
+
+/** True when the service surely did not commit the request: it answered with a client error. */
+export function definitelyRejected(e: unknown): boolean {
+  return e instanceof ApiError && e.status >= 400 && e.status < 500;
 }
 
 export async function requireKey(ks: KeyStore, user: string): Promise<LongTermKey> {

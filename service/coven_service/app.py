@@ -3,6 +3,10 @@
 Demo sign-in: one judge can play every fictional persona. The service still
 authenticates each request by session cookie and binds identities and public
 keys itself (the MVP trust model in guarantees.md).
+
+Two storage modes. Shared (local default): one SQLite file for everyone.
+Hosted (`spaces`): every browser gets a private demo space per app, so judges
+never see or change each other's data or demo clock (see spaces.py).
 """
 
 from __future__ import annotations
@@ -10,16 +14,18 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import sqlite3
 import time
 from typing import Any, Callable
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import db, lastlight, petitions
 from .common import Clock, Rejected, b64, b64decode, chain_entries, check_envelope, iso, receipt, validate_public_key
+from .spaces import SpaceConfig, Spaces
 
 log = logging.getLogger("coven.access")
 
@@ -123,16 +129,31 @@ class ClockIn(Strict):
 # Log only these fields per request. Bodies, query strings and headers are never logged (GR-LOG).
 LOGGED_FIELDS = ("method", "route", "status", "user", "ms")
 
+# Hosted mode: the largest real request (a seal with four approver shares) is about 200 KB.
+MAX_BODY = 512 * 1024
 
-def create_app(db_path: str, clock: Clock | None = None, demo: bool = True) -> FastAPI:
-    db.init(db_path)
+
+def create_app(db_path: str | None, clock: Clock | None = None, demo: bool = True, spaces: SpaceConfig | None = None) -> FastAPI:
     clock = clock or Clock()
+    hosted = Spaces(spaces, wall=clock.wall) if spaces is not None else None
+    if hosted is None:
+        if not db_path:
+            raise ValueError("shared mode needs a database path")
+        db.init(db_path)
     app = FastAPI(title="Coven service", docs_url=None, redoc_url=None, openapi_url=None)
+    app.state.spaces = hosted
+
+    def too_large(request: Request) -> bool:
+        n = request.headers.get("content-length")
+        return n is not None and (not n.isdigit() or int(n) > MAX_BODY)
 
     @app.middleware("http")
     async def access_log(request: Request, call_next):
         start = time.perf_counter()
-        response = await call_next(request)
+        if hosted is not None and too_large(request):
+            response = JSONResponse({"error": "request_too_large"}, status_code=413)
+        else:
+            response = await call_next(request)
         route = request.scope.get("route")
         fields = {
             "method": request.method,
@@ -161,15 +182,45 @@ def create_app(db_path: str, clock: Clock | None = None, demo: bool = True) -> F
         errors = [{"loc": list(err.get("loc", [])), "type": err.get("type")} for err in e.errors()]
         return JSONResponse({"error": "invalid_request", "fields": errors}, status_code=422)
 
-    def conn():
-        c = db.connect(db_path)
+    if hosted is not None:
+
+        @app.exception_handler(sqlite3.OperationalError)
+        async def storage(_: Request, e: sqlite3.OperationalError):
+            # A space is size-capped: the write was refused and rolled back, earlier data stays.
+            if "database or disk is full" in str(e):
+                return JSONResponse(
+                    {"error": "demo_space_full", "detail": "This demo space is full. Use Reset demo to start again."},
+                    status_code=507,
+                )
+            log.warning("storage error: %s", e)  # SQLite messages name tables, never values
+            return JSONResponse({"error": "storage_error"}, status_code=500)
+
+    def session_cookie(request: Request) -> str | None:
+        if hosted is None:
+            return cookie_name(request)
+        app_name = hosted.app_of(request)
+        return hosted.session_cookie(app_name) if app_name else None
+
+    def open_db(request: Request) -> sqlite3.Connection:
+        """Shared mode: the one database. Hosted: the caller's own space, or 401 when it has none."""
+        if hosted is None:
+            return db.connect(db_path)
+        space = hosted.resolve(request)
+        if space is None:
+            raise Rejected(401, "not_signed_in")
+        request.state.space = space
+        return hosted.connect(space)
+
+    def conn(request: Request):
+        c = open_db(request)
         try:
             yield c
         finally:
             c.close()
 
     def user(request: Request, c=Depends(conn)) -> str:
-        token = request.cookies.get(cookie_name(request))
+        name = session_cookie(request)
+        token = request.cookies.get(name) if name else None
         row = c.execute("SELECT user_id FROM sessions WHERE token = ?", (token or "",)).fetchone()
         if row is None:
             raise Rejected(401, "not_signed_in")
@@ -189,16 +240,39 @@ def create_app(db_path: str, clock: Clock | None = None, demo: bool = True) -> F
     if demo:
 
         @app.post("/api/session")
-        def sign_in(body: SessionIn, request: Request, c=Depends(conn)):
+        def sign_in(body: SessionIn, request: Request):
             if body.user not in PERSONAS:
                 raise Rejected(404, "unknown_persona")
             token = secrets.token_urlsafe(32)
-            with db.tx(c):
-                c.execute("INSERT INTO sessions(token, user_id, created_at) VALUES (?, ?, ?)",
-                          (token, body.user, clock.now(c)))
+            space = None
+            if hosted is None:
+                c = db.connect(db_path)
+            else:
+                app_name = hosted.app_of(request)
+                if app_name is None:
+                    raise Rejected(400, "app_header_required")
+                # The only place a space is made: a browser without one signs in.
+                space = hosted.resolve(request) or hosted.create(request, app_name)
+                c = hosted.connect(space)
+            try:
+                with db.tx(c):
+                    c.execute("INSERT INTO sessions(token, user_id, created_at) VALUES (?, ?, ?)",
+                              (token, body.user, clock.now(c)))
+            finally:
+                c.close()
             resp = JSONResponse({"user": body.user, **PERSONAS[body.user]})
-            resp.set_cookie(cookie_name(request), token, httponly=True, samesite="strict", path="/")
+            if space is None:
+                resp.set_cookie(cookie_name(request), token, httponly=True, samesite="strict", path="/")
+            else:
+                hosted.keep(resp, space, session=token)
             return resp
+
+        @app.get("/api/demo/space")
+        def space_info():
+            """Whether demo data is private to this browser (hosted) or shared (local)."""
+            if hosted is None:
+                return {"private": False}
+            return {"private": True, "idle_days": round(hosted.cfg.idle_seconds / 86400, 2)}
 
         @app.get("/api/demo/clock")
         def get_clock(c=Depends(conn)):
@@ -211,19 +285,35 @@ def create_app(db_path: str, clock: Clock | None = None, demo: bool = True) -> F
             return {"server_now": iso(clock.now(c)), "offset_seconds": clock.offset(c)}
 
         @app.post("/api/demo/reset")
-        def reset(request: Request, c=Depends(conn)):
-            with db.tx(c):
-                for t in ("sessions", "enrolled_keys", "records", "mail", "bg_approvals", "bg_petitions",
-                          "bg_approver_shares", "bg_seal_versions", "bg_items", "ll_recovery_shares",
-                          "ll_recoveries", "ll_items", "ll_trustee_shares", "ll_vaults", "settings"):
-                    c.execute(f"DELETE FROM {t}")
+        def reset(request: Request):
+            """Shared: everyone's demo data. Hosted: only the caller's own space (kept, emptied)."""
+            c = None
+            if hosted is None:
+                c = db.connect(db_path)
+            elif (space := hosted.resolve(request)) is not None:
+                try:
+                    c = hosted.connect(space)
+                except Rejected:
+                    c = None  # already gone: nothing to delete
+            if c is not None:
+                try:
+                    db.empty_demo_tables(c)
+                finally:
+                    c.close()
             resp = JSONResponse({"reset": True})
-            for name in (COOKIE, *APPS.values()):
-                resp.delete_cookie(name, path="/")
+            if hosted is None:
+                for name in (COOKIE, *APPS.values()):
+                    resp.delete_cookie(name, path="/")
+            elif (app_name := hosted.app_of(request)) is not None:
+                hosted.end_session(resp, app_name)
             return resp
 
     @app.get("/api/session")
-    def whoami(u: str = Depends(user)):
+    def whoami(request: Request, response: Response, u: str = Depends(user)):
+        if hosted is not None:
+            # Each app load refreshes both cookies, so an active space keeps its full idle lifetime.
+            name = session_cookie(request)
+            hosted.keep(response, request.state.space, session=request.cookies.get(name) if name else None)
         return {"user": u, **PERSONAS[u]}
 
     @app.post("/api/enroll")
@@ -378,4 +468,8 @@ def create_app(db_path: str, clock: Clock | None = None, demo: bool = True) -> F
 
 
 def app_from_env() -> FastAPI:
+    """Hosted when COVEN_SPACES_DIR is set; otherwise the shared database at COVEN_DB."""
+    cfg = SpaceConfig.from_env()
+    if cfg is not None:
+        return create_app(None, spaces=cfg)
     return create_app(os.environ.get("COVEN_DB", "coven-demo.sqlite"))

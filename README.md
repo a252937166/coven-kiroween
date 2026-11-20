@@ -1,11 +1,11 @@
 # Coven
 
-Coven is a foundation for handing over secrets when enough of the right people agree. Two local demo apps are built on it:
+Coven is a foundation for handing over secrets when enough of the right people agree. Two applications share the same key-splitting and recovery code, browser kit and service.
 
-- **Last Light** (personal): a vault handed to trustees after the owner stops checking in and a quorum of trustees acts together.
-- **Break Glass** (team): one emergency credential released to one requester after a quorum of approvers agrees on that same petition.
+- **Last Light** hands a family vault to trustees after the owner stops checking in and a quorum acts together. [Open Last Light](https://lastlight.axiqo.xyz/)
+- **Break Glass** releases one emergency credential to one requester after a quorum of approvers agrees on that petition. [Open Break Glass](https://breakglass.axiqo.xyz/)
 
-All people, credentials and letters in the demos are fictional.
+Choose **Set up demo** in either application. The hosted demos give every browser profile its own data and clock. All people, credentials and letters are fictional.
 
 ## What Coven guarantees, and what it does not
 
@@ -65,13 +65,34 @@ node core-ts/bin/recover.js verify last-light-bundle-XXXX.json --receipt <length
 
 "Reset demo" deletes all demo data and this browser's demo keys. One browser plays every persona; that is a demo simplification.
 
+## Hosted mode: a private demo per browser
+
+Locally the service keeps one shared database (`npm run service`, as above). For a public demo, start it with a spaces directory instead:
+
+```sh
+cd service && .venv/bin/python -m coven_service --port 8787 --spaces-dir /var/lib/coven/spaces
+```
+
+Every browser then gets its own private demo space for each app: setup, persona switches, the demo clock and "Reset demo" never touch anyone else's. A space is one SQLite file named by the SHA-256 of a random token the service issues in host-only cookies (`__Host-coven_space_ll` / `_bg` and `__Host-coven_session_ll` / `_bg`: Secure, HttpOnly, SameSite=Strict, Path=/, no Domain, kept for the idle lifetime and refreshed on each app load). The service logs spaces as counts only, never tokens or names.
+
+| Flag | Default | Bound |
+|---|---|---|
+| `--spaces-max` | 200 | spaces at once; when full, only one idle 30+ minutes makes room, else sign-in gets 503 |
+| `--space-idle-hours` | 168 | an unused space is deleted (wall-clock time; the demo clock never ages it) |
+| `--space-max-mb` | 2 | per space; a larger write gets 507 and Reset frees it |
+| `--spaces-per-client` | 24 | spaces per client address (keyed hash, key in memory only) |
+| `--space-min-idle-minutes` | 30 | how idle a space must be before it can make room |
+| `--insecure-cookies` | off | plain-http local testing only: no Secure flag, no `__Host-` prefix |
+
+Serve each app from its own HTTPS origin: the built `apps/*/dist` with the same headers `vite preview` sends (see `apps/*/vite.config.ts`), and `/api/*` proxied on the same origin to `127.0.0.1:8787` with `X-Forwarded-For` set. The service binds 127.0.0.1 only, trusts that header only from 127.0.0.1, refuses request bodies over 512 KB, and runs as one process. Card and bundle formats are the same in both modes.
+
 ## Screenshots
 
 `docs/screenshots/` holds 1440 px and 390 px views of both apps (fictional data; revealed content masked). Regenerate with `scripts/screenshots.ts` against a disposable service.
 
-## Submission packet
+## Project evidence
 
-Local, copy-ready Devpost text and images: `docs/submission/` (not submitted).
+Read the [Kiro development record](KIRO_USAGE.md), [independent browser checks](docs/acceptance/judge-hosting-2026-11-19.md) and [printed-card offline recovery results](docs/acceptance/AG-01-printed-card.md).
 
 ## Tests
 

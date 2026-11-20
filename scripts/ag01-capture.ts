@@ -34,7 +34,6 @@ const context = await browser.newContext({
   recordHar: { path: join(runDir, "capture", "browser.har"), content: "embed" },
 });
 const page = await context.newPage();
-page.on("dialog", (d) => d.accept());
 
 async function signInAs(name: string) {
   const select = page.getByLabel("Signed in as");

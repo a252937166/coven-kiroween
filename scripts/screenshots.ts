@@ -39,7 +39,6 @@ async function shoot(page: Page, name: string, maskSel: string[] = []) {
 {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const page = await ctx.newPage();
-  page.on("dialog", (d) => d.accept());
   await page.goto(LL);
   await page.getByRole("button", { name: "Set up demo" }).waitFor();
   await shoot(page, "last-light-first-run");
@@ -78,7 +77,6 @@ async function shoot(page: Page, name: string, maskSel: string[] = []) {
 {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const page = await ctx.newPage();
-  page.on("dialog", (d) => d.accept());
   await page.goto(BG);
   await page.getByRole("button", { name: "Set up demo" }).waitFor();
   await shoot(page, "break-glass-first-run");

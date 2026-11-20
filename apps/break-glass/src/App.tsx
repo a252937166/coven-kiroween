@@ -9,15 +9,18 @@ import {
   APPROVERS,
   approvePetition,
   confirmRotation,
+  demoProgress,
   denyPetition,
   forgetIfTerminal,
   hasLocalKey,
   listItems,
   listPetitions,
+  openedHere,
   openPetition,
   petition,
   petitionIdFromHash,
   petitionLink,
+  reconcilePetitions,
   retrieve,
   sealItem,
   setupDemo,
@@ -30,7 +33,10 @@ import {
   CovenMark,
   DemoClock,
   ErrorLine,
+  errorText,
   isCurrentEpoch,
+  Loading,
+  LoadProblem,
   MailViewer,
   personaName,
   personaRole,
@@ -43,7 +49,7 @@ import {
   type Tone,
 } from "@coven/ui-kit/components.tsx";
 import { StaleFlowError, type Persona } from "@coven/ui-kit/common.ts";
-import { useEntrance, useNewlyAdded, useServerClock } from "@coven/ui-kit/motion.ts";
+import { useEntrance, useFlash, useNewlyAdded, useServerClock } from "@coven/ui-kit/motion.ts";
 import type { Receipt, RecordEntry } from "@coven/core-ts/records";
 import { Relay, type RelayMode } from "./Instrument.tsx";
 
@@ -129,7 +135,7 @@ function remaining(expires: string, now: string) {
 }
 
 export function App() {
-  const { personas, me, switchTo, epoch, pending, runSignedInFlow } = usePersonas(api, "break-glass", "user:robin");
+  const { personas, me, switchTo, epoch, pending, runSignedInFlow, sessionError, retrySession } = usePersonas(api, "break-glass", "user:robin");
   const [items, setItems] = useState<BgItem[]>([]);
   const [petitions, setPetitions] = useState<PetitionStatus[]>([]);
   const [localKeys, setLocalKeys] = useState<Record<string, boolean>>({});
@@ -137,7 +143,8 @@ export function App() {
   const [now, setNow] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [released, setReleased] = useState<Released | null>(null);
-  const [loaded, setLoaded] = useState(false);
+  const [loaded, setLoaded] = useState(false); // at least one complete, verified load
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [linkId, setLinkId] = useState<string | null>(() => petitionIdFromHash(window.location.hash));
   const [selected, setSelected] = useState<string | null>(null);
   const [composing, setComposing] = useState(false);
@@ -157,6 +164,10 @@ export function App() {
     let stale = false;
     const e = currentEpoch();
     const live = () => !stale && isCurrentEpoch(e);
+    // If a request never answers, say so with a retry instead of waiting silently.
+    const slow = window.setTimeout(() => {
+      if (live()) setLoadError("the service has not answered for 12 seconds");
+    }, 12_000);
     (async () => {
       const [its, ps, rec, clk] = await Promise.all([
         listItems(api),
@@ -165,10 +176,8 @@ export function App() {
         api.get<{ server_now: string }>("/api/demo/clock"),
       ]);
       if (!live()) return; // a response for an earlier persona or refresh
-      setItems(its);
-      setPetitions(ps);
-      setReceipt(rec.receipt);
-      setNow(clk.server_now);
+      // A petition whose creation answer was lost is adopted by its one-time key.
+      await reconcilePetitions(ks, me, ps).catch(() => []);
       const lk: Record<string, boolean> = {};
       for (const p of ps) {
         if (p.requester_id === me) {
@@ -179,11 +188,24 @@ export function App() {
         }
       }
       if (!live()) return;
+      setItems(its);
+      setPetitions(ps);
+      setReceipt(rec.receipt);
+      setNow(clk.server_now);
       setLocalKeys(lk);
       setDataFor(`${me}:${e}`);
+      setLoadError(null);
       setLoaded(true);
-    })().catch(() => { if (live()) setLoaded(true); });
-    return () => { stale = true; };
+    })()
+      .catch((err) => {
+        // Never shown as an empty desk: the failure stays visible with a retry.
+        if (live()) setLoadError(errorText(err));
+      })
+      .finally(() => window.clearTimeout(slow));
+    return () => {
+      stale = true;
+      window.clearTimeout(slow);
+    };
   }, [me, epoch, pending, tick, linkId]);
 
   // Default selection: the linked petition, else the newest one this role can act on, else the newest.
@@ -234,6 +256,7 @@ export function App() {
     released && released.petitionId === current && released.viewer === me && isCurrentEpoch(released.epoch) ? released : null;
 
   const isAdmin = me === ADMIN;
+  const progress = demoProgress(items);
   const entering = useEntrance(loaded, 3200, pending);
 
   return (
@@ -261,11 +284,15 @@ export function App() {
       </header>
 
       <main className="bg-main" id="desk" inert={pending} aria-busy={pending}>
-        {loaded && items.length === 0 && <Setup runSignedInFlow={runSignedInFlow} />}
-        {items.length > 0 && me && (
+        {sessionError && <LoadProblem what="your demo session" error={sessionError} onRetry={retrySession} />}
+        {!me && !sessionError && <Loading what="the demo session" />}
+        {me && loadError && <LoadProblem what={loaded ? "the latest desk data" : "the desk"} error={loadError} onRetry={refresh} stale={loaded} />}
+        {me && !loaded && !loadError && <Loading what="the desk" />}
+        {me && loaded && !progress.ready && <Setup runSignedInFlow={runSignedInFlow} progress={progress} started={items.length > 0} />}
+        {me && loaded && progress.ready && (
           <>
             <Latest entry={latest} />
-            {!fresh && (
+            {!fresh && !loadError && (
               <p className="small muted" role="status">
                 Loading the desk for {personaName(personas, me)}…
               </p>
@@ -364,7 +391,7 @@ export function App() {
             </div>
             )}
 
-            <ItemsPanel items={items} isAdmin={isAdmin} personas={personas} onChanged={refresh} />
+            <ItemsPanel key={`${me}:${epoch}`} items={items} isAdmin={isAdmin} personas={personas} onChanged={refresh} />
           </>
         )}
 
@@ -407,11 +434,18 @@ function Latest({ entry }: { entry: RecordEntry | null }) {
  * confirms a new one.
  */
 function RelayPanel({ p, mode, nowMs, personas }: { p: PetitionStatus; mode: RelayMode; nowMs: number | null; personas: Persona[] }) {
-  const arrived = useNewlyAdded(p.approved_by.map((a) => `${p.petition_id}:${a}`));
+  // Seats newly lit for this petition, by its approval count: approver order can
+  // tie within one second and then sorts by approver ID.
+  const seats = Math.min(p.approvals, p.threshold);
+  const arrived = useNewlyAdded(Array.from({ length: seats }, (_, i) => `${p.petition_id}:seat:${i + 1}`), 1900);
   const pulse = new Set<number>();
-  p.approved_by.forEach((a, i) => {
-    if (arrived.has(`${p.petition_id}:${a}`)) pulse.add(i + 1);
-  });
+  for (let i = 1; i <= seats; i++) if (arrived.has(`${p.petition_id}:seat:${i}`)) pulse.add(i);
+  // The quorum beat: this same petition crossing its approval threshold while this view is open.
+  const latch = useFlash(
+    `${p.petition_id}|${p.approvals >= p.threshold ? 1 : 0}`,
+    (a, b) => a.split("|")[0] === b.split("|")[0] && a.endsWith("|0") && b.endsWith("|1"),
+    1900,
+  );
   const created = Date.parse(p.created_at);
   const expires = Date.parse(p.expires_at);
   const now = nowMs ?? Date.parse(p.server_now);
@@ -424,23 +458,27 @@ function RelayPanel({ p, mode, nowMs, personas }: { p: PetitionStatus; mode: Rel
       approvals={p.approvals}
       names={p.approved_by.map((a) => personaName(personas, a).split(" ")[0])}
       pulse={pulse}
+      latch={latch}
       windowLeft={windowLeft}
       windowText={windowLeft === null ? undefined : `window ${remaining(p.expires_at, new Date(now).toISOString())}`}
     />
   );
 }
 
-function Setup({ runSignedInFlow }: { runSignedInFlow: <T>(fn: () => Promise<T>) => Promise<T | undefined> }) {
+function Setup(props: { runSignedInFlow: <T>(fn: () => Promise<T>) => Promise<T | undefined>; progress: { sealed: number; total: number }; started: boolean }) {
+  const { runSignedInFlow, progress, started } = props;
   const [log, setLog] = useState<string[]>([]);
   const { busy, error, run } = useAction();
+  const resume = started;
   return (
     <section className="bg-ticket bg-setup" aria-labelledby="setup-h">
       <Relay mode="idle" threshold={2} approvals={0} names={[]} pulse={NONE} windowLeft={null} />
-      <p className="bg-kicker">Desk closed · no credentials sealed</p>
-      <h1 id="setup-h">Set up the fictional team</h1>
+      <p className="bg-kicker">{resume ? `Setup did not finish · ${progress.sealed} of ${progress.total} sealed` : "Desk closed · no credentials sealed"}</p>
+      <h1 id="setup-h">{resume ? "Finish the demo setup" : "Set up the fictional team"}</h1>
       <p>
-        This creates a key pair in this browser for each persona, enrolls the public keys, and has Quinn seal three fictional credentials.
-        Each credential gets its own key, split 2 of 4 among Sage, Rowan, Ash and Wren.
+        {resume
+          ? "An earlier setup stopped part way. Running it again keeps what is done: it adds only the missing credentials and never seals one twice."
+          : "This creates a key pair in this browser for each persona, enrolls the public keys, and has Quinn seal three fictional credentials. Each credential gets its own key, split 2 of 4 among Sage, Rowan, Ash and Wren."}
       </p>
       <button
         className="primary"
@@ -538,7 +576,9 @@ function Ticket(props: {
   const [p, setP] = useState<PetitionStatus | null>(null);
   const [missing, setMissing] = useState(false);
   const [haveKey, setHaveKey] = useState(false);
+  const [openedBefore, setOpenedBefore] = useState(false);
   const [refused, setRefused] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [n, setN] = useState(0);
   const { busy, error, run } = useAction();
   const live = useLive(props.epoch);
@@ -548,15 +588,28 @@ function Ticket(props: {
     let stale = false;
     const ok = () => !stale && live();
     setMissing(false);
-    petition(api, pid).then(
-      (s) => { if (ok()) setP(s); },
-      (e) => {
-        if (!ok()) return;
+    (async () => {
+      const s = await petition(api, pid);
+      if (!ok()) return;
+      // A petition whose creation answer was lost is adopted by its one-time key.
+      await reconcilePetitions(ks, me, [s]).catch(() => []);
+      const k = await hasLocalKey(ks, pid);
+      const o = await openedHere(ks, pid);
+      if (!ok()) return;
+      setP(s);
+      setHaveKey(k);
+      setOpenedBefore(o);
+      setFetchError(null);
+    })().catch((e) => {
+      if (!ok()) return;
+      if (e instanceof ApiError && e.status === 404) {
         setP(null);
-        if (e instanceof ApiError && e.status === 404) setMissing(true);
-      },
-    );
-    hasLocalKey(ks, pid).then((k) => { if (ok()) setHaveKey(k); });
+        setMissing(true);
+        setFetchError(null);
+      } else {
+        setFetchError(errorText(e)); // the last status stays, marked as possibly out of date
+      }
+    });
     return () => { stale = true; };
   }, [pid, me, props.tick, n, live]);
 
@@ -579,6 +632,21 @@ function Ticket(props: {
   const approvedByMe = p !== null && p.approved_by.includes(me);
   const isAdmin = me === ADMIN;
   const name = (id: string) => personaName(personas, id);
+  const releasedHere =
+    !!props.released && props.released.viewer === me && p !== null && p.requester_id === me && props.released.petitionId === p.petition_id;
+  const wasOpenedHere = openedBefore || releasedHere;
+
+  // When the window ends on the service clock, read the authoritative status once,
+  // so the ticket does not stay on Approved with an ended window. A failed read shows a retry.
+  const expiryRead = useRef<string | null>(null);
+  useEffect(() => {
+    if (!p || nowMs === null || !(p.state === "Open" || p.state === "Approved" || p.state === "Released")) return;
+    const key = `${p.petition_id}|${p.expires_at}`;
+    if (nowMs >= Date.parse(p.expires_at) && expiryRead.current !== key) {
+      expiryRead.current = key;
+      setN((x) => x + 1);
+    }
+  }, [nowMs, p]);
 
   const doRetrieve = () =>
     run(async () => {
@@ -610,6 +678,10 @@ function Ticket(props: {
           <button className="link" onClick={props.onClose}>Close link</button>
         </div>
       )}
+      {fetchError && (
+        <LoadProblem what={p ? "the latest petition status" : "this petition"} error={fetchError} onRetry={() => setN((x) => x + 1)} stale={!!p} />
+      )}
+      {!p && !missing && !fetchError && <Loading what="the petition" />}
       {missing && (
         <>
           <p role="status" className="bg-missing">This petition is not available to {name(me)}. Nothing is released through this link.</p>
@@ -674,22 +746,64 @@ function Ticket(props: {
           </div>
 
           <div className="bg-work">
+          {/* The decrypted value comes first in the work area, so the value and Hide are on screen
+              without scrolling at 1280x720 and up. The action strip follows it. */}
+          {releasedHere && (
+            <ReleasedView
+              released={props.released!}
+              closedAs={terminal ? STATE[p.state].label : null}
+              item={item}
+              canRotate={p.rotation_owed}
+              onHide={props.onHide}
+              onRotated={() => run(() => props.onRotated(props.released!.itemId))}
+            />
+          )}
           <div className="bg-actionstrip" aria-label="Your action">
+            {/* Who asked and when the link ends, next to the action, so neither needs a scroll on a 1280-wide screen. */}
+            {(p.state === "Open" || p.state === "Approved" || p.state === "Released") && (
+              <p className="bg-actionctx small" data-testid="action-context">
+                <span>
+                  Requester <strong>{name(p.requester_id)}</strong>
+                </span>
+                <span>
+                  Link ends <strong className="tnum">{hms(p.expires_at)} UTC</strong> <span className="tnum">({remaining(p.expires_at, nowIso)})</span>
+                </span>
+              </p>
+            )}
+            {/* Rotation is metadata only: it stays available after Hide or a reload, without the credential or a new retrieval. */}
+            {mine && p.state === "Released" && p.rotation_owed && item?.rotation_state === "rotation_required" && !releasedHere && (
+              <div className="bg-rotate">
+                <p className="small">
+                  <strong>Rotation required.</strong> Rotate it where it was issued, then record that here. This does not retrieve it again.
+                </p>
+                <button disabled={busy} onClick={() => run(() => props.onRotated(p.item_id))}>
+                  I rotated it in the issuing system
+                </button>
+              </div>
+            )}
             {eligible && p.state === "Open" && !approvedByMe && (
               <>
-                <button className="primary" disabled={busy} onClick={() => run(async () => { await approvePetition(api, ks, me, pid, live); if (!live()) return; props.onChanged(); setN((x) => x + 1); })}>
-                  Approve: encrypt my share to this requester key
+                <button
+                  className="primary"
+                  disabled={busy}
+                  aria-describedby={`keyline-${p.petition_id}`}
+                  onClick={() => run(async () => { await approvePetition(api, ks, me, pid, live); if (!live()) return; props.onChanged(); setN((x) => x + 1); })}
+                >
+                  Approve: encrypt my share
                 </button>
-                <button className="danger" disabled={busy} onClick={() => run(async () => { if (!live()) return; await denyPetition(api, pid); if (!live()) return; props.onChanged(); setN((x) => x + 1); })}>
-                  Deny
-                </button>
+                <span className="bg-keyline small" id={`keyline-${p.petition_id}`}>
+                  to {name(p.requester_id)}'s petition key <code className="tnum">{short(p.fingerprint).split(" ").slice(0, 4).join(" ")}</code>
+                </span>
               </>
             )}
             {eligible && approvedByMe && p.state === "Open" && <p className="small">You approved. Another approval from you does not count.</p>}
-            {isAdmin && !eligible && (p.state === "Open" || p.state === "Approved") && (
-              <button className="danger" disabled={busy} onClick={() => run(async () => { if (!live()) return; await denyPetition(api, pid); if (!live()) return; props.onChanged(); setN((x) => x + 1); })}>
-                Deny as item admin
-              </button>
+            {/* Decision D2: any eligible approver, or the item admin, may deny while the petition is Open or Approved. */}
+            {(eligible || isAdmin) && (p.state === "Open" || p.state === "Approved") && (
+              <DenyControl
+                label={eligible ? "Deny" : "Deny as item admin"}
+                busy={busy}
+                onDeny={() => run(async () => { if (!live()) return; await denyPetition(api, pid); if (!live()) return; props.onChanged(); setN((x) => x + 1); })}
+              />
             )}
             {mine && haveKey && (fromLink || p.state === "Approved" || p.state === "Released") && (
               <button className="primary" disabled={busy} onClick={doRetrieve}>
@@ -697,14 +811,21 @@ function Ticket(props: {
               </button>
             )}
             {mine && p.state === "Open" && <p className="small">Waiting for approvals. Nothing is released before quorum.</p>}
-            {mine && !haveKey && !refused && p.state === "Released" && (
+            {mine && !haveKey && !refused && p.state === "Released" && wasOpenedHere && (
               <p className="small">Opened in this browser; the petition key was deleted after decryption.</p>
+            )}
+            {mine && !haveKey && !refused && (p.state === "Approved" || (p.state === "Released" && !wasOpenedHere)) && (
+              <p className="small bg-missing-key" role="note">
+                This browser does not hold this petition's key, so it cannot decrypt here. The key stays in the browser that opened the
+                petition: retrieve it there before the window ends. If that browser no longer has it, open a new petition.
+              </p>
             )}
             {mine && !haveKey && !refused && p.state !== "Released" && p.state !== "Open" && p.state !== "Approved" && (
               <p className="small">This browser does not hold this petition's key (it was used or removed).</p>
             )}
             {!mine && !eligible && !isAdmin && <p className="small muted">No action for your role on this petition.</p>}
-            {!mine && eligible && p.state !== "Open" && <p className="small muted">Approvals are closed for this petition.</p>}
+            {!mine && eligible && p.state !== "Open" && p.state !== "Approved" && <p className="small muted">Approvals are closed for this petition.</p>}
+            {!mine && eligible && p.state === "Approved" && <p className="small muted">Quorum reached; approvals are closed for this petition.</p>}
           </div>
           {refused && (
             <p className="notice danger small" role="alert">
@@ -715,16 +836,6 @@ function Ticket(props: {
 
           {p.state === "Expired" && (
             <p className="notice danger small">This link stopped working at {p.expires_at}. A new release needs a new petition.</p>
-          )}
-
-          {props.released && props.released.viewer === me && p.requester_id === me && props.released.petitionId === p.petition_id && (
-            <ReleasedView
-              released={props.released}
-              closedAs={terminal ? STATE[p.state].label : null}
-              item={item}
-              onHide={props.onHide}
-              onRotated={() => run(() => props.onRotated(props.released!.itemId))}
-            />
           )}
 
           {mine && (
@@ -754,10 +865,13 @@ function Ticket(props: {
 
 function ItemsPanel(props: { items: BgItem[]; isAdmin: boolean; personas: Persona[]; onChanged: () => void }) {
   const { items, isAdmin, onChanged } = props;
-  const [resealFor, setResealFor] = useState<string | null>(null);
-  const [newSecret, setNewSecret] = useState("");
+  // The draft belongs to one item: choosing another item, cancelling or a
+  // persona switch (this panel remounts) discards it, so a value typed for
+  // item A can never be shown for, or sealed into, item B.
+  const [draft, setDraft] = useState<{ itemId: string; text: string } | null>(null);
   const { busy, error, run } = useAction();
   const names = useMemo(() => new Map(props.personas.map((p) => [p.id, p.name])), [props.personas]);
+  const draftItem = draft ? items.find((i) => i.item_id === draft.itemId) : undefined;
   return (
     <section className="bg-items" aria-labelledby="items-h">
       <h2 id="items-h">Sealed items</h2>
@@ -780,41 +894,56 @@ function ItemsPanel(props: { items: BgItem[]; isAdmin: boolean; personas: Person
                 <span className="small muted">no rotation pending</span>
               )}
             </span>
+            {isAdmin && i.rotation_state === "rotation_required" && (
+              <span>
+                <button disabled={busy} onClick={() => run(async () => { await confirmRotation(api, i.item_id); onChanged(); })}>
+                  Record rotation
+                </button>
+              </span>
+            )}
             {isAdmin && (
               <span>
-                <button onClick={() => setResealFor(i.item_id)}>Reseal</button>
+                <button aria-pressed={draft?.itemId === i.item_id} onClick={() => setDraft(draft?.itemId === i.item_id ? draft : { itemId: i.item_id, text: "" })}>
+                  Reseal
+                </button>
               </span>
             )}
           </li>
         ))}
       </ul>
-      {isAdmin && resealFor && (
-        <div className="bg-reseal">
-          <h3>Reseal {resealFor} with a new value</h3>
+      {isAdmin && draft && draftItem && (
+        <div className="bg-reseal" key={draft.itemId}>
+          <h3>Reseal {draftItem.name} with a new value</h3>
           <p className="small muted">
             The browser generates a fresh key and a fresh 2-of-4 share set. Open petitions for the old version are invalidated. Old shares and keys
             cannot open the new version.
           </p>
           <div className="field">
-            <label htmlFor="new-secret">New credential (fictional)</label>
-            <textarea id="new-secret" value={newSecret} onChange={(e) => setNewSecret(e.target.value)} />
+            <label htmlFor="new-secret">New credential for {draftItem.name} (fictional)</label>
+            <textarea
+              id="new-secret"
+              autoComplete="off"
+              spellCheck={false}
+              value={draft.text}
+              onChange={(e) => setDraft({ itemId: draft.itemId, text: e.target.value })}
+            />
           </div>
           <div className="row">
             <button
               className="primary"
-              disabled={busy || !newSecret}
-              onClick={() =>
+              disabled={busy || !draft.text}
+              onClick={() => {
+                const { itemId, text } = draft; // sealed exactly as shown: this item, this text
                 run(async () => {
-                  await sealItem(api, resealFor, newSecret, APPROVERS, 2);
-                  setNewSecret("");
-                  setResealFor(null);
+                  await sealItem(api, itemId, text, APPROVERS, 2);
+                  setDraft((d) => (d && d.itemId === itemId ? null : d));
                   onChanged();
-                })
-              }
+                });
+              }}
             >
               Seal new version
             </button>
-            <button onClick={() => setResealFor(null)}>Cancel</button>
+            <button onClick={() => setDraft(null)}>Cancel</button>
           </div>
         </div>
       )}
@@ -823,22 +952,87 @@ function ItemsPanel(props: { items: BgItem[]; isAdmin: boolean; personas: Person
   );
 }
 
+/**
+ * Deny is terminal, so it asks once, in the page: the first press opens a
+ * small confirmation with Cancel focused; Escape or Cancel closes it.
+ */
+function DenyControl({ label, busy, onDeny }: { label: string; busy: boolean; onDeny: () => void }) {
+  const [asking, setAsking] = useState(false);
+  const opener = useRef<HTMLButtonElement>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (asking) cancel.current?.focus();
+  }, [asking]);
+  const close = () => {
+    setAsking(false);
+    window.requestAnimationFrame(() => opener.current?.focus());
+  };
+  if (!asking) {
+    return (
+      <button ref={opener} className="danger" disabled={busy} aria-haspopup="true" onClick={() => setAsking(true)}>
+        {label}
+      </button>
+    );
+  }
+  return (
+    <div
+      className="bg-confirm"
+      role="group"
+      aria-label="Confirm deny"
+      onKeyDown={(e) => {
+        if (e.key === "Escape") close();
+      }}
+    >
+      <span className="small">Deny closes this petition for good. A new release needs a new petition.</span>
+      <button ref={cancel} disabled={busy} onClick={close}>
+        Cancel
+      </button>
+      <button
+        className="danger"
+        disabled={busy}
+        onClick={() => {
+          setAsking(false);
+          onDeny();
+        }}
+      >
+        Deny petition
+      </button>
+    </div>
+  );
+}
+
 function ReleasedView(props: {
   released: Released;
   /** Set when the service has since closed the petition: the label of that terminal state. */
   closedAs: string | null;
   item: BgItem | undefined;
+  /** The service says this petition's release opened the current rotation obligation. */
+  canRotate: boolean;
   onHide: () => void;
   onRotated: () => void;
 }) {
-  const { released, item, closedAs } = props;
+  const { released, item, closedAs, canRotate } = props;
   const [copied, setCopied] = useState(false);
   return (
-    <div className={`bg-released${closedAs ? " closed" : ""}`} aria-labelledby="rel-h">
-      <div className="spread">
-        <h3 id="rel-h">Decrypted and verified in this browser: {item?.name ?? released.itemId}</h3>
-        <button onClick={props.onHide}>Hide</button>
+    <div className={`bg-released${closedAs ? " closed" : ""}`} aria-labelledby="rel-h" data-testid="released-view">
+      {/* Value and Hide first and compact: both stay on screen at 1280x720 without scrolling. */}
+      <div className="bg-released-head">
+        <h3 id="rel-h">
+          Decrypted and verified in this browser<span className="visually-hidden">: {item?.name ?? released.itemId}</span>
+        </h3>
+        <div className="bg-released-actions">
+          <button
+            onClick={async () => {
+              await navigator.clipboard.writeText(released.secret);
+              setCopied(true);
+            }}
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
+          <button onClick={props.onHide}>Hide</button>
+        </div>
       </div>
+      <div className="secret">{released.secret}</div>
       {closedAs && (
         <p className="bg-closed-note small" role="status">
           Retrieved earlier, while the petition was active. The service now reports it {closedAs.toLowerCase()} and will not serve it again.
@@ -849,19 +1043,8 @@ function ReleasedView(props: {
         Rebuilt from the approvers' shares; every share envelope and the item header checked out here. Only this item's key was rebuilt.
         Hiding it clears it from this page.
       </p>
-      <div className="secret">{released.secret}</div>
-      <div className="row bg-copy">
-        <button
-          onClick={async () => {
-            await navigator.clipboard.writeText(released.secret);
-            setCopied(true);
-          }}
-        >
-          {copied ? "Copied" : "Copy"}
-        </button>
-      </div>
       <p className="notice">{released.notice}</p>
-      {item?.rotation_state === "rotation_required" && (
+      {canRotate && item?.rotation_state === "rotation_required" && (
         <div className="notice danger">
           <strong>Rotation required.</strong> After the incident, rotate this credential where it was issued, then record it here.
           <div className="bg-copy">
