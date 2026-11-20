@@ -49,8 +49,28 @@ Only what was actually used is listed. Each entry points to a committed artifact
 | Gate | Status | Evidence |
 |---|---|---|
 | AG-01 Printed card | The first physical run passed on November 8 with a card from commit `7665e0d`. On November 20 the owner repeated the test with a card and matching bundle from the public deployment. Under network denial the paper share alone was refused and three shares recovered the expected letter. The scanner found zero matches in the captured traffic, service log and configuration notes, or the encrypted bundle. [Physical acceptance record](docs/acceptance/AG-01-printed-card.md#november-20-public-deployment-result). | physical pass |
-| AG-02 Committed `.kiro/` | `scripts/check-kiro-tracked.sh . HEAD` passes on local commit 12300a0; 9 of 9 ignore fixtures pass. **Pending:** needs a clean public checkout of the submission commit. | rehearsal only |
+| AG-02 Committed `.kiro/` | In a public checkout, run `scripts/check-kiro-tracked.sh https://github.com/a252937166/coven-kiroween.git "$(git rev-parse HEAD)"`. The output identifies the exact tested commit and checks that the required Kiro artifacts are present, tracked and unignored. | reproducible release check |
 
 ## Not yet used
 
 Hooks, custom agents, MCP servers, powers, Kiro CLI headless runs in CI, and the IDE's spec-driven task execution are planned in `PROPOSAL.md` section 6 and have not been used yet. Specs 01 to 04 and 06 to 12 have not been written; their features were built from `PROPOSAL.md` sections 3 and 4.
+
+## Public development history
+
+The original work log above uses local commit IDs. The public history preserves the sequence and dates of the source changes and excludes the private submission packet. Use the corresponding public revisions to inspect the changes.
+
+| Original revision | Public revision |
+| --- | --- |
+| `6136333` | [dbe647c](https://github.com/a252937166/coven-kiroween/commit/dbe647c) |
+| `12300a0` | [d7ae4bb](https://github.com/a252937166/coven-kiroween/commit/d7ae4bb) |
+| `fe8ee50` | [74c20f9](https://github.com/a252937166/coven-kiroween/commit/74c20f9) |
+| `87b5879` | [369acc5](https://github.com/a252937166/coven-kiroween/commit/369acc5) |
+| `7665e0d` | [6c4d300](https://github.com/a252937166/coven-kiroween/commit/6c4d300) |
+| `d64ffaa` | [4460cb7](https://github.com/a252937166/coven-kiroween/commit/4460cb7) |
+| `a2c7b5c` | [ddb9427](https://github.com/a252937166/coven-kiroween/commit/ddb9427) |
+| `bbf8ba4` | [30d778a](https://github.com/a252937166/coven-kiroween/commit/30d778a) |
+| `65ce2f4` | [ff775c4](https://github.com/a252937166/coven-kiroween/commit/ff775c4) |
+| `92adad5` | [b66b024](https://github.com/a252937166/coven-kiroween/commit/b66b024) |
+| `6d7a8db` | [f577466](https://github.com/a252937166/coven-kiroween/commit/f577466) |
+| `449eb7c` | [40c78ce](https://github.com/a252937166/coven-kiroween/commit/40c78ce) |
+| `e9c43bc` | [a2de47c](https://github.com/a252937166/coven-kiroween/commit/a2de47c) |
